@@ -3,51 +3,56 @@ import Database from "better-sqlite3";
 
 const db = new Database("studyhub.db");
 
-// Make sure profile_image exists.
+// Make sure profile_image exists only when the users table exists.
 const userColumns = db
   .prepare(`PRAGMA table_info(users)`)
   .all() as Array<{
     name: string;
   }>;
 
-const hasProfileImage = userColumns.some(
-  (column) => column.name === "profile_image"
-);
+if (userColumns.length > 0) {
+  const hasProfileImage = userColumns.some(
+    (column) => column.name === "profile_image"
+  );
 
-if (!hasProfileImage) {
-  db.exec(`
-    ALTER TABLE users
-    ADD COLUMN profile_image TEXT DEFAULT ''
-  `);
+  if (!hasProfileImage) {
+    db.exec(`
+      ALTER TABLE users
+      ADD COLUMN profile_image TEXT DEFAULT ''
+    `);
+  }
 }
 
-// Make sure chat_enabled and group_image exist.
+// Make sure chat_enabled and group_image exist only
+// when the study_groups table exists.
 const groupColumns = db
   .prepare(`PRAGMA table_info(study_groups)`)
   .all() as Array<{
     name: string;
   }>;
 
-const hasChatEnabled = groupColumns.some(
-  (column) => column.name === "chat_enabled"
-);
+if (groupColumns.length > 0) {
+  const hasChatEnabled = groupColumns.some(
+    (column) => column.name === "chat_enabled"
+  );
 
-if (!hasChatEnabled) {
-  db.exec(`
-    ALTER TABLE study_groups
-    ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 1
-  `);
-}
+  if (!hasChatEnabled) {
+    db.exec(`
+      ALTER TABLE study_groups
+      ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 1
+    `);
+  }
 
-const hasGroupImage = groupColumns.some(
-  (column) => column.name === "group_image"
-);
+  const hasGroupImage = groupColumns.some(
+    (column) => column.name === "group_image"
+  );
 
-if (!hasGroupImage) {
-  db.exec(`
-    ALTER TABLE study_groups
-    ADD COLUMN group_image TEXT DEFAULT ''
-  `);
+  if (!hasGroupImage) {
+    db.exec(`
+      ALTER TABLE study_groups
+      ADD COLUMN group_image TEXT DEFAULT ''
+    `);
+  }
 }
 
 function getCurrentUser(request: NextRequest) {

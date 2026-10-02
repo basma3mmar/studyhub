@@ -1,26 +1,244 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fff7fa;
+  --foreground: #1f2937;
+  --pink-primary: #ec4899;
+  --pink-light: #fce7f3;
+  --pink-soft: #fff1f7;
+  --gray-border: #e5e7eb;
+  --gray-text: #6b7280;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+html {
+  scroll-behavior: smooth;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
+  margin: 0;
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* Light Theme */
+
+.bg-slate-50 {
+  background-color: #fff7fa !important;
+}
+
+.bg-white {
+  background-color: #fffafb !important;
+}
+
+.bg-indigo-50 {
+  background-color: #fce7f3 !important;
+}
+
+.bg-indigo-100 {
+  background-color: #fbcfe8 !important;
+}
+
+.text-indigo-600 {
+  color: #db2777 !important;
+}
+
+.text-indigo-700 {
+  color: #be185d !important;
+}
+
+.text-indigo-900 {
+  color: #831843 !important;
+}
+
+.border-indigo-200 {
+  border-color: #f9a8d4 !important;
+}
+
+.border-slate-200 {
+  border-color: #e5e7eb !important;
+}
+
+.border-slate-300 {
+  border-color: #d1d5db !important;
+}
+
+.text-slate-900 {
+  color: #1f2937 !important;
+}
+
+.text-slate-800 {
+  color: #374151 !important;
+}
+
+.text-slate-700 {
+  color: #4b5563 !important;
+}
+
+.text-slate-600 {
+  color: #6b7280 !important;
+}
+
+.text-slate-500 {
+  color: #6b7280 !important;
+}
+
+.text-slate-400 {
+  color: #9ca3af !important;
+}
+
+/* Pink hover */
+
+.hover\:bg-indigo-50:hover {
+  background-color: #fce7f3 !important;
+}
+
+.hover\:bg-indigo-100:hover {
+  background-color: #fbcfe8 !important;
+}
+
+.hover\:bg-indigo-200:hover {
+  background-color: #f9a8d4 !important;
+}
+
+.hover\:text-indigo-600:hover {
+  color: #db2777 !important;
+}
+
+.hover\:text-indigo-700:hover {
+  color: #be185d !important;
+}
+
+.hover\:border-indigo-400:hover {
+  border-color: #f472b6 !important;
+}
+
+.hover\:border-indigo-500:hover {
+  border-color: #ec4899 !important;
+}
+
+/* Dark Theme */
+
+.dark body {
+  background: #020617;
+  color: #ffffff;
+}
+
+.dark .bg-slate-50 {
+  background-color: #020617 !important;
+}
+
+.dark .bg-white {
+  background-color: #0f172a !important;
+}
+
+.dark .bg-indigo-50 {
+  background-color: #1e1b4b !important;
+}
+
+.dark .bg-indigo-100 {
+  background-color: #312e81 !important;
+}
+
+.dark .text-slate-900 {
+  color: #ffffff !important;
+}
+
+.dark .text-slate-800 {
+  color: #e2e8f0 !important;
+}
+
+.dark .text-slate-700 {
+  color: #cbd5e1 !important;
+}
+
+.dark .text-slate-600 {
+  color: #cbd5e1 !important;
+}
+
+.dark .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+.dark .text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+.dark .border-slate-200 {
+  border-color: #1e293b !important;
+}
+
+.dark .border-slate-300 {
+  border-color: #334155 !important;
+}
+
+.dark .text-indigo-600 {
+  color: #a5b4fc !important;
+}
+
+.dark .text-indigo-700 {
+  color: #c7d2fe !important;
+}
+
+.dark .text-indigo-900 {
+  color: #e0e7ff !important;
+}
+/* ============================= */
+/* Pink Scrollbars */
+/* ============================= */
+
+html {
+  scrollbar-width: auto;
+  scrollbar-color: #ec4899 #f1f1f1;
+}
+
+html::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+html::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+html::-webkit-scrollbar-thumb {
+  background: #ec4899;
+  border-radius: 999px;
+  border: 2px solid #f1f1f1;
+}
+
+html::-webkit-scrollbar-thumb:hover {
+  background: #db2777;
+}
+
+/* Dark Mode */
+html.dark {
+  scrollbar-color: #ec4899 #0f172a;
+}
+
+html.dark::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+html.dark::-webkit-scrollbar-thumb {
+  background: #ec4899;
+  border: 2px solid #0f172a;
+}
+
+html.dark::-webkit-scrollbar-thumb:hover {
+  background: #f472b6;
 }

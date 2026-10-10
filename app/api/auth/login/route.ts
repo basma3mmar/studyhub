@@ -9,6 +9,33 @@ const dbPath = path.join(process.cwd(), "studyhub.db");
 const db = new Database(dbPath);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    profile_image TEXT DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'User'
+  )
+`);
+
+const userColumns = db
+  .prepare("PRAGMA table_info(users)")
+  .all() as Array<{ name: string }>;
+
+const hasRoleColumn = userColumns.some(
+  (column) => column.name === "role"
+);
+
+if (!hasRoleColumn) {
+  db.exec(`
+    ALTER TABLE users
+    ADD COLUMN role TEXT NOT NULL DEFAULT 'User'
+  `);
+}
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     token TEXT NOT NULL UNIQUE,
@@ -49,7 +76,12 @@ export async function POST(request: Request) {
     const user = db
       .prepare(
         `
-        SELECT id, username, email, password
+        SELECT
+          id,
+          username,
+          email,
+          password,
+          role
         FROM users
         WHERE LOWER(email) = LOWER(?)
         LIMIT 1
@@ -61,6 +93,7 @@ export async function POST(request: Request) {
           username: string;
           email: string;
           password: string;
+          role: string;
         }
       | undefined;
 
@@ -106,6 +139,7 @@ export async function POST(request: Request) {
           id: user.id,
           username: user.username,
           email: user.email,
+          role: user.role,
         },
       },
       { status: 200 }

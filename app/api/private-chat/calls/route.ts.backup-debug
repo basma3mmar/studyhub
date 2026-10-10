@@ -1,0 +1,326 @@
+﻿import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import Database from "better-sqlite3";
+import path from "path";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const dbPath = path.join(process.cwd(), "studyhub.db");
+
+function openDb() {
+  return new Database(dbPath, { timeout: 5000 });
+}
+
+async function sessionUserId() {
+  const cookieStore = await cookies();
+  const token = cookieStore.get("studyhub_session")?.value;
+  if (!token) return null;
+
+  const db = openDb();
+  try {
+    const row = db.prepare(
+      "SELECT user_id FROM sessions WHERE token = ? LIMIT 1"
+    ).get(token) as { user_id: number } | undefined;
+    return row?.user_id ?? null;
+  } finally {
+    db.close();
+  }
+}
+
+function ensureTables(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS private_chat_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      caller_id INTEGER NOT NULL,
+      receiver_id INTEGER NOT NULL,
+      call_type TEXT NOT NULL CHECK(call_type IN ('audio','video')),
+      status TEXT NOT NULL DEFAULT 'ringing'
+        CHECK(status IN ('ringing','accepted','rejected','ended','missed')),
+      offer TEXT,
+      answer TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS private_chat_call_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id INTEGER NOT NULL,
+      sender_id INTEGER NOT NULL,
+      recipient_id INTEGER NOT NULL,
+      signal_type TEXT NOT NULL CHECK(signal_type IN ('offer','answer','candidate')),
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_private_call_receiver
+      ON private_chat_calls(receiver_id, status);
+
+    CREATE INDEX IF NOT EXISTS idx_private_call_signals_recipient
+      ON private_chat_call_signals(call_id, recipient_id, id);
+  `);
+}
+
+function isFriend(db: Database.Database, a: number, b: number) {
+  return Boolean(db.prepare(`
+    SELECT 1 FROM friends
+    WHERE (user_id = ? AND friend_id = ?)
+       OR (user_id = ? AND friend_id = ?)
+    LIMIT 1
+  `).get(a, b, b, a));
+}
+
+function isBlocked(db: Database.Database, a: number, b: number) {
+  return Boolean(db.prepare(`
+    SELECT 1 FROM blocked_users
+    WHERE (blocker_id = ? AND blocked_id = ?)
+       OR (blocker_id = ? AND blocked_id = ?)
+    LIMIT 1
+  `).get(a, b, b, a));
+}
+
+function canCall(db: Database.Database, caller: number, receiver: number) {
+  const settings = db.prepare(`
+    SELECT allow_calls FROM private_chat_settings WHERE user_id = ?
+  `).get(receiver) as { allow_calls: string } | undefined;
+
+  const permission = settings?.allow_calls ?? "everyone";
+
+  if (permission === "nobody") return false;
+  if (permission === "everyone") return true;
+  return isFriend(db, caller, receiver);
+}
+
+export async function GET(request: Request) {
+  const userId = await sessionUserId();
+  if (!userId) {
+    return NextResponse.json({ message: "Not authenticated." }, { status: 401 });
+  }
+
+  const url = new URL(request.url);
+  const callId = Number(url.searchParams.get("callId") || 0);
+  const afterId = Math.max(0, Number(url.searchParams.get("afterId") || 0));
+
+  const db = openDb();
+  try {
+    ensureTables(db);
+
+    db.prepare(`
+      UPDATE private_chat_calls
+      SET status = 'missed', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'ringing'
+        AND created_at < datetime('now', '-90 seconds')
+    `).run();
+
+    if (callId) {
+      const call = db.prepare(`
+        SELECT * FROM private_chat_calls
+        WHERE id = ? AND (caller_id = ? OR receiver_id = ?)
+        LIMIT 1
+      `).get(callId, userId, userId) as Record<string, unknown> | undefined;
+
+      if (!call) {
+        return NextResponse.json({ message: "Call not found." }, { status: 404 });
+      }
+
+      const signals = db.prepare(`
+        SELECT id, signal_type AS type, payload, sender_id AS senderId
+        FROM private_chat_call_signals
+        WHERE call_id = ? AND recipient_id = ? AND id > ?
+        ORDER BY id ASC LIMIT 100
+      `).all(callId, userId, afterId);
+
+      return NextResponse.json({ success: true, call, signals });
+    }
+
+    const incoming = db.prepare(`
+      SELECT c.id, c.caller_id AS callerId, c.receiver_id AS receiverId,
+             c.call_type AS callType, c.status, c.created_at AS createdAt,
+             u.username AS callerUsername
+      FROM private_chat_calls c
+      JOIN users u ON u.id = c.caller_id
+      WHERE c.receiver_id = ? AND c.status = 'ringing'
+      ORDER BY c.id DESC LIMIT 5
+    `).all(userId);
+
+    const active = db.prepare(`
+      SELECT id, caller_id AS callerId, receiver_id AS receiverId,
+             call_type AS callType, status, created_at AS createdAt
+      FROM private_chat_calls
+      WHERE (caller_id = ? OR receiver_id = ?)
+        AND status IN ('ringing','accepted')
+      ORDER BY id DESC LIMIT 5
+    `).all(userId, userId);
+
+    return NextResponse.json({ success: true, incoming, active });
+  } catch (error) {
+    console.error("PRIVATE CALL GET:", error);
+    return NextResponse.json({ message: "Failed to load calls." }, { status: 500 });
+  } finally {
+    db.close();
+  }
+}
+
+export async function POST(request: Request) {
+  const userId = await sessionUserId();
+  if (!userId) {
+    return NextResponse.json({ message: "Not authenticated." }, { status: 401 });
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ message: "Invalid request body." }, { status: 400 });
+  }
+
+  const action = body.action;
+  const db = openDb();
+
+  try {
+    ensureTables(db);
+
+    if (action === "start") {
+      const receiverId = Number(body.receiverId);
+      const callType = body.callType;
+      const offer = body.offer;
+
+      if (!Number.isInteger(receiverId) || receiverId <= 0 || receiverId === userId) {
+        return NextResponse.json({ message: "Invalid recipient." }, { status: 400 });
+      }
+      if (callType !== "audio" && callType !== "video") {
+        return NextResponse.json({ message: "Invalid call type." }, { status: 400 });
+      }
+      if (!offer || typeof offer !== "object" || JSON.stringify(offer).length > 100000) {
+        return NextResponse.json({ message: "Invalid call offer." }, { status: 400 });
+      }
+
+      const recipientExists = db.prepare(
+        "SELECT id FROM users WHERE id = ?"
+      ).get(receiverId);
+
+      if (!recipientExists) {
+        return NextResponse.json({ message: "User not found." }, { status: 404 });
+      }
+
+      if (isBlocked(db, userId, receiverId)) {
+        return NextResponse.json({ message: "Calls are unavailable for this user." }, { status: 403 });
+      }
+
+      if (!canCall(db, userId, receiverId)) {
+        return NextResponse.json({ message: "This user does not accept calls from you." }, { status: 403 });
+      }
+
+      const existing = db.prepare(`
+        SELECT id FROM private_chat_calls
+        WHERE status IN ('ringing','accepted')
+          AND ((caller_id = ? AND receiver_id = ?)
+            OR (caller_id = ? AND receiver_id = ?))
+        LIMIT 1
+      `).get(userId, receiverId, receiverId, userId) as { id: number } | undefined;
+
+      if (existing) {
+        return NextResponse.json({ message: "There is already an active call." }, { status: 409 });
+      }
+
+      const result = db.prepare(`
+        INSERT INTO private_chat_calls
+          (caller_id, receiver_id, call_type, offer)
+        VALUES (?, ?, ?, ?)
+      `).run(userId, receiverId, callType, JSON.stringify(offer));
+
+      const callId = Number(result.lastInsertRowid);
+
+      db.prepare(`
+        INSERT INTO private_chat_call_signals
+          (call_id, sender_id, recipient_id, signal_type, payload)
+        VALUES (?, ?, ?, 'offer', ?)
+      `).run(callId, userId, receiverId, JSON.stringify(offer));
+
+      return NextResponse.json({ success: true, callId }, { status: 201 });
+    }
+
+    const callId = Number(body.callId);
+    if (!Number.isInteger(callId) || callId <= 0) {
+      return NextResponse.json({ message: "Invalid call ID." }, { status: 400 });
+    }
+
+    const call = db.prepare(`
+      SELECT * FROM private_chat_calls
+      WHERE id = ? AND (caller_id = ? OR receiver_id = ?)
+      LIMIT 1
+    `).get(callId, userId, userId) as {
+      id: number;
+      caller_id: number;
+      receiver_id: number;
+      status: string;
+    } | undefined;
+
+    if (!call) {
+      return NextResponse.json({ message: "Call not found." }, { status: 404 });
+    }
+
+    if (action === "accept") {
+      if (call.receiver_id !== userId || call.status !== "ringing") {
+        return NextResponse.json({ message: "This call cannot be accepted." }, { status: 409 });
+      }
+      const answer = body.answer;
+      if (!answer || typeof answer !== "object" || JSON.stringify(answer).length > 100000) {
+        return NextResponse.json({ message: "Invalid answer." }, { status: 400 });
+      }
+
+      db.prepare(`
+        UPDATE private_chat_calls SET status = 'accepted', answer = ?,
+          updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).run(JSON.stringify(answer), callId);
+
+      db.prepare(`
+        INSERT INTO private_chat_call_signals
+          (call_id, sender_id, recipient_id, signal_type, payload)
+        VALUES (?, ?, ?, 'answer', ?)
+      `).run(callId, userId, call.caller_id, JSON.stringify(answer));
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "signal") {
+      if (call.status !== "accepted") {
+        return NextResponse.json({ message: "Call is not connected yet." }, { status: 409 });
+      }
+
+      const type = body.signalType;
+      const payload = body.payload;
+      if (type !== "candidate" || !payload || typeof payload !== "object" ||
+          JSON.stringify(payload).length > 20000) {
+        return NextResponse.json({ message: "Invalid signal." }, { status: 400 });
+      }
+
+      const recipientId = call.caller_id === userId ? call.receiver_id : call.caller_id;
+
+      db.prepare(`
+        INSERT INTO private_chat_call_signals
+          (call_id, sender_id, recipient_id, signal_type, payload)
+        VALUES (?, ?, ?, 'candidate', ?)
+      `).run(callId, userId, recipientId, JSON.stringify(payload));
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "reject" || action === "end") {
+      const nextStatus = action === "reject" ? "rejected" : "ended";
+      db.prepare(`
+        UPDATE private_chat_calls SET status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status IN ('ringing','accepted')
+      `).run(nextStatus, callId);
+
+      return NextResponse.json({ success: true });
+    }
+
+    return NextResponse.json({ message: "Unknown action." }, { status: 400 });
+  } catch (error) {
+    console.error("PRIVATE CALL POST:", error);
+    return NextResponse.json({ message: "Failed to process call." }, { status: 500 });
+  } finally {
+    db.close();
+  }
+}

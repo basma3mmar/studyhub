@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { LanguageProvider } from "./language-provider";
 
 export const metadata: Metadata = {
   title: "StudyHub",
@@ -13,31 +14,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function () {
-                try {
-                  const darkMode =
-                    localStorage.getItem("studyhubDarkMode");
-
-                  if (darkMode === "true") {
-                    document.documentElement.classList.add("dark");
-                  } else {
-                    document.documentElement.classList.remove("dark");
-                  }
-                } catch (error) {
-                  console.error(error);
-                }
-              })();
-            `,
-          }}
-        />
-      </head>
-
       <body className="bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-white">
-        {children}
+        <LanguageProvider>
+          {children}
+        </LanguageProvider>
       </body>
     </html>
   );

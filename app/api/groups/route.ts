@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Database from "better-sqlite3";
+import crypto from "crypto";
 
 const db = new Database("studyhub.db");
-
-/* =========================
-   Create Tables
-========================= */
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS study_groups (
@@ -14,7 +11,11 @@ db.exec(`
     description TEXT DEFAULT '',
     subject TEXT DEFAULT '',
     owner_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    group_image TEXT DEFAULT '',
+    chat_enabled INTEGER NOT NULL DEFAULT 1,
+    visibility TEXT NOT NULL DEFAULT 'public',
+    invite_code TEXT DEFAULT ''
   );
 
   CREATE TABLE IF NOT EXISTS study_group_members (
@@ -26,30 +27,45 @@ db.exec(`
   );
 `);
 
-/* =========================
-   Add group_image if missing
-========================= */
+function ensureColumn(
+  table: string,
+  column: string,
+  definition: string
+) {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as Array<{ name: string }>;
 
-const columns = db
-  .prepare(`PRAGMA table_info(study_groups)`)
-  .all() as Array<{
-    name: string;
-  }>;
-
-const hasGroupImage = columns.some(
-  (column) => column.name === "group_image"
-);
-
-if (!hasGroupImage) {
-  db.exec(`
-    ALTER TABLE study_groups
-    ADD COLUMN group_image TEXT DEFAULT ''
-  `);
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`
+    );
+  }
 }
 
-/* =========================
-   Current User
-========================= */
+ensureColumn(
+  "study_groups",
+  "group_image",
+  "TEXT DEFAULT ''"
+);
+
+ensureColumn(
+  "study_groups",
+  "chat_enabled",
+  "INTEGER NOT NULL DEFAULT 1"
+);
+
+ensureColumn(
+  "study_groups",
+  "visibility",
+  "TEXT NOT NULL DEFAULT 'public'"
+);
+
+ensureColumn(
+  "study_groups",
+  "invite_code",
+  "TEXT DEFAULT ''"
+);
 
 function getCurrentUser(request: NextRequest) {
   const token = request.cookies.get("studyhub_session")?.value;
@@ -58,15 +74,15 @@ function getCurrentUser(request: NextRequest) {
     return null;
   }
 
-  const user = db
+  return db
     .prepare(`
       SELECT
         users.id,
         users.username,
         users.email
-      FROM sessions
-      JOIN users
-        ON users.id = sessions.user_id
+      FROM users
+      JOIN sessions
+        ON sessions.user_id = users.id
       WHERE sessions.token = ?
     `)
     .get(token) as
@@ -76,13 +92,31 @@ function getCurrentUser(request: NextRequest) {
         email: string;
       }
     | undefined;
-
-  return user || null;
 }
 
-/* =========================
-   GET /api/groups
-========================= */
+function generateInviteCode() {
+  let code = "";
+
+  do {
+    code = crypto
+      .randomBytes(6)
+      .toString("base64url")
+      .slice(0, 8)
+      .toUpperCase();
+  } while (
+    db
+      .prepare(
+        `
+          SELECT study_groups.id
+          FROM study_groups
+          WHERE study_groups.invite_code = ?
+        `
+      )
+      .get(code)
+  );
+
+  return code;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -107,40 +141,68 @@ export async function GET(request: NextRequest) {
           g.subject,
           g.owner_id,
           g.created_at,
-
           COALESCE(g.group_image, '') AS group_image,
+          COALESCE(g.chat_enabled, 1) AS chat_enabled,
+          COALESCE(g.visibility, 'public') AS visibility,
+
+          CASE
+            WHEN g.owner_id = ? THEN 1
+            ELSE 0
+          END AS is_owner,
+
+          CASE
+            WHEN EXISTS (
+              SELECT 1
+              FROM study_group_members m
+              WHERE m.group_id = g.id
+              AND m.user_id = ?
+            ) THEN 1
+            ELSE 0
+          END AS is_member,
 
           u.username AS owner_username,
 
-          COUNT(m.id) AS member_count,
-
-          EXISTS (
-            SELECT 1
-            FROM study_group_members my_member
-            WHERE my_member.group_id = g.id
-              AND my_member.user_id = ?
-          ) AS is_member
+          (
+            SELECT COUNT(*)
+            FROM study_group_members m2
+            WHERE m2.group_id = g.id
+          ) AS member_count
 
         FROM study_groups g
 
         JOIN users u
           ON u.id = g.owner_id
 
-        LEFT JOIN study_group_members m
-          ON m.group_id = g.id
+        WHERE
+          COALESCE(g.visibility, 'public') = 'public'
 
-        GROUP BY g.id
+          OR g.owner_id = ?
+
+          OR EXISTS (
+            SELECT 1
+            FROM study_group_members m3
+            WHERE m3.group_id = g.id
+            AND m3.user_id = ?
+          )
 
         ORDER BY g.id DESC
       `)
-      .all(user.id);
+      .all(
+        user.id,
+        user.id,
+        user.id,
+        user.id
+      );
 
     return NextResponse.json({
       success: true,
       groups,
     });
   } catch (error) {
-    console.error("GET /api/groups error:", error);
+    console.error(
+      "GET /api/groups error:",
+      error
+    );
 
     return NextResponse.json(
       {
@@ -151,10 +213,6 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-
-/* =========================
-   POST /api/groups
-========================= */
 
 export async function POST(request: NextRequest) {
   try {
@@ -187,6 +245,11 @@ export async function POST(request: NextRequest) {
         ? body.subject.trim()
         : "";
 
+    const visibility =
+      body.visibility === "private"
+        ? "private"
+        : "public";
+
     if (!name) {
       return NextResponse.json(
         {
@@ -197,12 +260,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (name.length < 3) {
+    if (name.length > 100) {
       return NextResponse.json(
         {
           success: false,
           message:
-            "Group name must be at least 3 characters.",
+            "Group name cannot be longer than 100 characters.",
         },
         { status: 400 }
       );
@@ -210,84 +273,76 @@ export async function POST(request: NextRequest) {
 
     const createdAt = new Date().toISOString();
 
-    const createGroup = db.transaction(() => {
-      const result = db
-        .prepare(`
-          INSERT INTO study_groups (
-            name,
-            description,
-            subject,
-            owner_id,
-            created_at,
-            group_image
-          )
-          VALUES (?, ?, ?, ?, ?, ?)
-        `)
-        .run(
+    const inviteCode =
+      visibility === "private"
+        ? generateInviteCode()
+        : "";
+
+    const result = db
+      .prepare(`
+        INSERT INTO study_groups (
           name,
           description,
           subject,
-          user.id,
-          createdAt,
-          ""
-        );
-
-      const groupId = Number(result.lastInsertRowid);
-
-      db.prepare(`
-        INSERT INTO study_group_members (
-          group_id,
-          user_id,
-          joined_at
+          owner_id,
+          created_at,
+          group_image,
+          chat_enabled,
+          visibility,
+          invite_code
         )
-        VALUES (?, ?, ?)
-      `).run(
-        groupId,
+        VALUES (?, ?, ?, ?, ?, '', 1, ?, ?)
+      `)
+      .run(
+        name,
+        description,
+        subject,
         user.id,
-        createdAt
+        createdAt,
+        visibility,
+        inviteCode
       );
 
-      return groupId;
-    });
+    const groupId = Number(
+      result.lastInsertRowid
+    );
 
-    const groupId = createGroup();
-
-    const group = db
-      .prepare(`
-        SELECT
-          g.id,
-          g.name,
-          g.description,
-          g.subject,
-          g.owner_id,
-          g.created_at,
-
-          COALESCE(g.group_image, '') AS group_image,
-
-          u.username AS owner_username,
-
-          1 AS member_count,
-          1 AS is_member
-
-        FROM study_groups g
-
-        JOIN users u
-          ON u.id = g.owner_id
-
-        WHERE g.id = ?
-      `)
-      .get(groupId);
+    db.prepare(`
+      INSERT INTO study_group_members (
+        group_id,
+        user_id,
+        joined_at
+      )
+      VALUES (?, ?, ?)
+    `).run(
+      groupId,
+      user.id,
+      createdAt
+    );
 
     return NextResponse.json(
       {
         success: true,
-        message: "Group created successfully.",
-        group,
+        group: {
+          id: groupId,
+          name,
+          description,
+          subject,
+          visibility,
+          inviteCode,
+          inviteLink:
+            visibility === "private"
+              ? `/groups/${groupId}?invite=${inviteCode}`
+              : "",
+        },
       },
       { status: 201 }
     );
-  } catch (error: any) {
-    console.error("POST /api/groups error:", error);
+  } catch (error) {
+    console.error(
+      "POST /api/groups error:",
+      error
+    );
 
     return NextResponse.json(
       {

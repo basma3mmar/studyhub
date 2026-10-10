@@ -3,8 +3,24 @@ import Database from "better-sqlite3";
 
 const db = new Database("studyhub.db");
 
+function ensureMessagePinColumn() {
+  const columns = db
+    .prepare(`PRAGMA table_info(study_group_messages)`)
+    .all() as Array<{ name: string }>;
+
+  if (!columns.some((column) => column.name === "is_pinned")) {
+    db.exec(`
+      ALTER TABLE study_group_messages
+      ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0
+    `);
+  }
+}
+
+ensureMessagePinColumn();
+
 function getCurrentUser(request: NextRequest) {
-  const token = request.cookies.get("studyhub_session")?.value;
+  const token =
+    request.cookies.get("studyhub_session")?.value;
 
   if (!token) {
     return null;
@@ -13,9 +29,13 @@ function getCurrentUser(request: NextRequest) {
   return (
     db
       .prepare(`
-        SELECT users.id, users.username, users.email
+        SELECT
+          users.id,
+          users.username,
+          users.email
         FROM sessions
-        JOIN users ON users.id = sessions.user_id
+        JOIN users
+          ON users.id = sessions.user_id
         WHERE sessions.token = ?
       `)
       .get(token) as
@@ -75,7 +95,50 @@ function isGroupOwner(
   return group?.owner_id === userId;
 }
 
-// EDIT MESSAGE
+function isGroupMember(
+  groupId: number,
+  userId: number
+) {
+  return db
+    .prepare(`
+      SELECT id
+      FROM study_group_members
+      WHERE group_id = ?
+      AND user_id = ?
+    `)
+    .get(groupId, userId);
+}
+
+function getFullMessage(
+  groupId: number,
+  messageId: number
+) {
+  return db
+    .prepare(`
+      SELECT
+        study_group_messages.id,
+        study_group_messages.group_id,
+        study_group_messages.user_id,
+        study_group_messages.message,
+        study_group_messages.media_url,
+        study_group_messages.media_type,
+        study_group_messages.is_pinned,
+        study_group_messages.created_at,
+        users.username
+      FROM study_group_messages
+      JOIN users
+        ON users.id = study_group_messages.user_id
+      WHERE study_group_messages.id = ?
+      AND study_group_messages.group_id = ?
+    `)
+    .get(messageId, groupId);
+}
+
+// ======================================================
+// PATCH MESSAGE
+// EDIT / PIN / UNPIN
+// ======================================================
+
 export async function PATCH(
   request: NextRequest,
   context: {
@@ -118,7 +181,8 @@ export async function PATCH(
           id,
           group_id,
           user_id,
-          message
+          message,
+          is_pinned
         FROM study_group_messages
         WHERE id = ?
         AND group_id = ?
@@ -129,6 +193,7 @@ export async function PATCH(
           group_id: number;
           user_id: number;
           message: string;
+          is_pinned: number;
         }
       | undefined;
 
@@ -142,10 +207,126 @@ export async function PATCH(
       );
     }
 
+    const body = await request.json().catch(() => ({}));
+
+    const action =
+      typeof body.action === "string"
+        ? body.action
+        : "edit";
+
     const owner = isGroupOwner(
       groupId,
       user.id
     );
+
+    // ==================================================
+    // PIN / UNPIN MESSAGE
+    // ==================================================
+
+    if (action === "pin") {
+      const member = isGroupMember(
+        groupId,
+        user.id
+      );
+
+      if (!member) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "You are not a member of this group.",
+          },
+          { status: 403 }
+        );
+      }
+
+      const canPin =
+        message.user_id === user.id ||
+        owner;
+
+      if (!canPin) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "You can only pin your own messages.",
+          },
+          { status: 403 }
+        );
+      }
+
+      const requestedPinned =
+        typeof body.isPinned === "boolean"
+          ? body.isPinned
+          : !Boolean(message.is_pinned);
+
+      // ================================================
+      // MAXIMUM 5 PINNED MESSAGES PER GROUP
+      // ================================================
+
+      if (
+        requestedPinned &&
+        !Boolean(message.is_pinned)
+      ) {
+        const pinnedCount = db
+          .prepare(`
+            SELECT COUNT(*) as count
+            FROM study_group_messages
+            WHERE group_id = ?
+            AND is_pinned = 1
+          `)
+          .get(groupId) as {
+            count: number;
+          };
+
+        if (pinnedCount.count >= 5) {
+          return NextResponse.json(
+            {
+              success: false,
+              message:
+                "You can pin up to 5 messages only.",
+            },
+            { status: 400 }
+          );
+        }
+      }
+
+      db.prepare(`
+        UPDATE study_group_messages
+        SET is_pinned = ?
+        WHERE id = ?
+        AND group_id = ?
+      `).run(
+        requestedPinned ? 1 : 0,
+        messageId,
+        groupId
+      );
+
+      const updatedMessage =
+        getFullMessage(
+          groupId,
+          messageId
+        );
+
+      return NextResponse.json({
+        success: true,
+        message: updatedMessage,
+      });
+    }
+
+    // ==================================================
+    // EDIT MESSAGE
+    // ==================================================
+
+    if (action !== "edit") {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid message action.",
+        },
+        { status: 400 }
+      );
+    }
 
     if (
       message.user_id !== user.id &&
@@ -160,8 +341,6 @@ export async function PATCH(
         { status: 403 }
       );
     }
-
-    const body = await request.json();
 
     const newMessage =
       typeof body.message === "string"
@@ -200,21 +379,11 @@ export async function PATCH(
       groupId
     );
 
-    const updatedMessage = db
-      .prepare(`
-        SELECT
-          study_group_messages.id,
-          study_group_messages.group_id,
-          study_group_messages.user_id,
-          study_group_messages.message,
-          study_group_messages.created_at,
-          users.username
-        FROM study_group_messages
-        JOIN users
-          ON users.id = study_group_messages.user_id
-        WHERE study_group_messages.id = ?
-      `)
-      .get(messageId);
+    const updatedMessage =
+      getFullMessage(
+        groupId,
+        messageId
+      );
 
     return NextResponse.json({
       success: true,
@@ -229,14 +398,17 @@ export async function PATCH(
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to edit message.",
+        message: "Failed to update message.",
       },
       { status: 500 }
     );
   }
 }
 
+// ======================================================
 // DELETE MESSAGE
+// ======================================================
+
 export async function DELETE(
   request: NextRequest,
   context: {
@@ -322,11 +494,15 @@ export async function DELETE(
       DELETE FROM study_group_messages
       WHERE id = ?
       AND group_id = ?
-    `).run(messageId, groupId);
+    `).run(
+      messageId,
+      groupId
+    );
 
     return NextResponse.json({
       success: true,
-      message: "Message deleted successfully.",
+      message:
+        "Message deleted successfully.",
     });
   } catch (error) {
     console.error(

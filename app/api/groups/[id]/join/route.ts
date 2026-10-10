@@ -3,24 +3,12 @@ import Database from "better-sqlite3";
 
 const db = new Database("studyhub.db");
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS study_group_members (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    joined_at TEXT NOT NULL,
-    UNIQUE(group_id, user_id)
-  );
-`);
-
 function getCurrentUser(request: NextRequest) {
   const token = request.cookies.get("studyhub_session")?.value;
 
-  if (!token) {
-    return null;
-  }
+  if (!token) return null;
 
-  const user = db
+  return db
     .prepare(`
       SELECT users.id, users.username, users.email
       FROM sessions
@@ -34,17 +22,11 @@ function getCurrentUser(request: NextRequest) {
         email: string;
       }
     | undefined;
-
-  return user || null;
 }
 
 export async function POST(
   request: NextRequest,
-  context: {
-    params: Promise<{
-      id: string;
-    }>;
-  }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     const user = getCurrentUser(request);
@@ -60,7 +42,6 @@ export async function POST(
     }
 
     const { id } = await context.params;
-
     const groupId = Number(id);
 
     if (!Number.isInteger(groupId) || groupId <= 0) {
@@ -73,9 +54,21 @@ export async function POST(
       );
     }
 
+    const body = await request.json().catch(() => ({}));
+
+    const inviteCode =
+      typeof body.inviteCode === "string"
+        ? body.inviteCode.trim().toUpperCase()
+        : "";
+
     const group = db
       .prepare(`
-        SELECT id, name
+        SELECT
+          id,
+          name,
+          owner_id,
+          COALESCE(visibility, 'public') AS visibility,
+          COALESCE(invite_code, '') AS invite_code
         FROM study_groups
         WHERE id = ?
       `)
@@ -83,6 +76,9 @@ export async function POST(
       | {
           id: number;
           name: string;
+          owner_id: number;
+          visibility: string;
+          invite_code: string;
         }
       | undefined;
 
@@ -106,13 +102,34 @@ export async function POST(
       .get(groupId, user.id);
 
     if (existingMember) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "You are already a member of this group.",
-        },
-        { status: 409 }
-      );
+      return NextResponse.json({
+        success: true,
+        alreadyMember: true,
+        message: "You are already a member of this group.",
+      });
+    }
+
+    if (group.visibility === "private") {
+      if (!inviteCode) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "This is a private group. An invite code is required.",
+          },
+          { status: 403 }
+        );
+      }
+
+      if (inviteCode !== group.invite_code) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid invite code.",
+          },
+          { status: 403 }
+        );
+      }
     }
 
     db.prepare(`
@@ -134,13 +151,11 @@ export async function POST(
         FROM study_group_members
         WHERE group_id = ?
       `)
-      .get(groupId) as {
-        count: number;
-      };
+      .get(groupId) as { count: number };
 
     return NextResponse.json({
       success: true,
-      message: `You joined ${group.name}.`,
+      message: "Joined group successfully.",
       memberCount: memberCount.count,
     });
   } catch (error) {

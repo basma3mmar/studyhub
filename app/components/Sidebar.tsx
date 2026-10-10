@@ -3,33 +3,59 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import {
+  languages,
+  useLanguage,
+} from "../language-provider";
 
 const navigation = [
-  { href: "/dashboard", icon: "⌂", label: "Dashboard" },
-  { href: "/planner", icon: "▣", label: "Planner" },
-  { href: "/tasks", icon: "✓", label: "Tasks" },
-  { href: "/notes", icon: "✎", label: "Notes" },
-  { href: "/pomodoro", icon: "◷", label: "Pomodoro" },
-  { href: "/materials", icon: "▤", label: "Materials" },
-  { href: "/groups", icon: "👥", label: "Study Groups" },
-  { href: "/progress", icon: "▥", label: "Progress" },
-  { href: "/notifications", icon: "🔔", label: "Notifications" },
-];
+  { href: "/dashboard", icon: "⌂", label: "dashboard" },
+  { href: "/planner", icon: "▣", label: "planner" },
+  { href: "/tasks", icon: "✓", label: "tasks" },
+  { href: "/notes", icon: "✎", label: "notes" },
+  { href: "/pomodoro", icon: "◷", label: "pomodoro" },
+  { href: "/materials", icon: "▤", label: "materials" },
+  { href: "/groups", icon: "👥", label: "groups" },
+  { href: "/private-chat", icon: "💬", label: "privateChat" },
+  { href: "/progress", icon: "▥", label: "progress" },
+  { href: "/notifications", icon: "🔔", label: "notifications" },
+] as const;
+
+type Role =
+  | "Owner"
+  | "Super Owner"
+  | "Admin"
+  | "User";
 
 type User = {
   id: number;
   username: string;
   email: string;
+  role?: Role;
 };
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
 
+  const { language, setLanguage, t } = useLanguage();
+  const [languageOpen, setLanguageOpen] = useState(false);
+
   const [user, setUser] = useState<User | null>(null);
   const [profileImage, setProfileImage] = useState("");
   const [darkMode, setDarkMode] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  const isArabic = language === "ar";
+
+  const currentLanguage =
+    languages.find((item) => item.code === language) ||
+    languages.find((item) => item.code === "en") ||
+    languages[0];
+
+  const canManageUsers =
+    user?.role === "Owner" ||
+    user?.role === "Super Owner";
 
   useEffect(() => {
     const savedUser = localStorage.getItem("studyhubUser");
@@ -42,15 +68,17 @@ export default function Sidebar() {
       }
     }
 
-    const savedImage =
-      localStorage.getItem("studyhubProfileImage");
+    const savedImage = localStorage.getItem(
+      "studyhubProfileImage"
+    );
 
     if (savedImage) {
       setProfileImage(savedImage);
     }
 
-    const savedDarkMode =
-      localStorage.getItem("studyhubDarkMode");
+    const savedDarkMode = localStorage.getItem(
+      "studyhubDarkMode"
+    );
 
     setDarkMode(savedDarkMode === "true");
 
@@ -112,10 +140,9 @@ export default function Sidebar() {
       );
 
     function updateProfileImage() {
-      const image =
-        localStorage.getItem(
-          "studyhubProfileImage"
-        );
+      const image = localStorage.getItem(
+        "studyhubProfileImage"
+      );
 
       setProfileImage(image || "");
     }
@@ -131,6 +158,22 @@ export default function Sidebar() {
 
     function updateNotifications() {
       loadUnreadNotifications();
+    }
+
+    function updateUser() {
+      const savedUser =
+        localStorage.getItem("studyhubUser");
+
+      if (!savedUser) {
+        setUser(null);
+        return;
+      }
+
+      try {
+        setUser(JSON.parse(savedUser));
+      } catch {
+        setUser(null);
+      }
     }
 
     window.addEventListener(
@@ -156,6 +199,11 @@ export default function Sidebar() {
     window.addEventListener(
       "storage",
       updateDarkMode
+    );
+
+    window.addEventListener(
+      "storage",
+      updateUser
     );
 
     return () => {
@@ -187,6 +235,11 @@ export default function Sidebar() {
         "storage",
         updateDarkMode
       );
+
+      window.removeEventListener(
+        "storage",
+        updateUser
+      );
     };
   }, []);
 
@@ -209,7 +262,7 @@ export default function Sidebar() {
   }
 
   const username =
-    user?.username || "Student";
+    user?.username || t.common.student;
 
   const email =
     user?.email || "student@example.com";
@@ -219,7 +272,12 @@ export default function Sidebar() {
 
   return (
     <aside
-      className={`fixed left-0 top-0 hidden h-screen w-64 border-r lg:block ${
+      dir={isArabic ? "rtl" : "ltr"}
+      className={`fixed top-0 hidden h-screen w-64 lg:block ${
+        isArabic
+          ? "right-0 border-l"
+          : "left-0 border-r"
+      } ${
         darkMode
           ? "border-slate-800 bg-slate-900"
           : "border-slate-200 bg-white"
@@ -268,12 +326,12 @@ export default function Sidebar() {
                       : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`}
               >
-                <span className="flex w-5 justify-center text-base">
+                <span className="flex w-5 shrink-0 justify-center text-base">
                   {item.icon}
                 </span>
 
                 <span className="flex-1">
-                  {item.label}
+                  {t.nav[item.label]}
                 </span>
 
                 {item.href ===
@@ -288,6 +346,31 @@ export default function Sidebar() {
               </Link>
             );
           })}
+
+          {/* User Management */}
+          {canManageUsers && (
+            <Link
+              href="/admin/users"
+              className={`relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                pathname === "/admin/users" ||
+                pathname.startsWith("/admin/users/")
+                  ? darkMode
+                    ? "bg-indigo-950 text-indigo-300"
+                    : "bg-indigo-50 text-indigo-700"
+                  : darkMode
+                    ? "text-slate-300 hover:bg-slate-800 hover:text-white"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <span className="flex w-5 shrink-0 justify-center text-base">
+                🛡️
+              </span>
+
+              <span className="flex-1">
+                User Management
+              </span>
+            </Link>
+          )}
         </nav>
 
         {/* Bottom section */}
@@ -298,6 +381,125 @@ export default function Sidebar() {
               : "border-slate-200"
           }`}
         >
+          {/* Language Selector */}
+          <div className="relative mb-3">
+            <button
+              type="button"
+              onClick={() =>
+                setLanguageOpen(
+                  (current) => !current
+                )
+              }
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                darkMode
+                  ? "text-slate-300 hover:bg-slate-800 hover:text-white"
+                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+              aria-label={t.common.selectLanguage}
+              aria-expanded={languageOpen}
+            >
+              <span className="flex w-5 shrink-0 justify-center text-base">
+                🌐
+              </span>
+
+              <span
+                className={`flex-1 ${
+                  isArabic
+                    ? "text-right"
+                    : "text-left"
+                }`}
+              >
+                {currentLanguage.nativeName}
+              </span>
+
+              <span className="text-xs">
+                ▾
+              </span>
+            </button>
+
+            {languageOpen && (
+              <>
+                <button
+                  type="button"
+                  aria-label={t.common.selectLanguage}
+                  className="fixed inset-0 z-40 cursor-default"
+                  onClick={() =>
+                    setLanguageOpen(false)
+                  }
+                />
+
+                <div
+                  className={`absolute bottom-full z-50 mb-2 max-h-80 w-full overflow-y-auto rounded-xl border p-2 shadow-xl ${
+                    isArabic
+                      ? "right-0"
+                      : "left-0"
+                  } ${
+                    darkMode
+                      ? "border-slate-700 bg-slate-800"
+                      : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div
+                    className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wide ${
+                      darkMode
+                        ? "text-slate-400"
+                        : "text-slate-400"
+                    }`}
+                  >
+                    <span>🌐</span>
+
+                    <span>
+                      {t.common.selectLanguage}
+                    </span>
+                  </div>
+
+                  {languages.map((item) => {
+                    const selected =
+                      item.code === language;
+
+                    return (
+                      <button
+                        key={item.code}
+                        type="button"
+                        onClick={() => {
+                          setLanguage(item.code);
+                          setLanguageOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition ${
+                          isArabic
+                            ? "text-right"
+                            : "text-left"
+                        } ${
+                          selected
+                            ? darkMode
+                              ? "bg-indigo-950 font-semibold text-indigo-300"
+                              : "bg-indigo-50 font-semibold text-indigo-600"
+                            : darkMode
+                              ? "text-slate-300 hover:bg-slate-700"
+                              : "text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        <span className="text-lg">
+                          {item.flag}
+                        </span>
+
+                        <span className="flex-1">
+                          {item.nativeName}
+                        </span>
+
+                        {selected && (
+                          <span className="font-bold">
+                            ✓
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
           {/* Settings */}
           <Link
             href="/settings"
@@ -311,11 +513,11 @@ export default function Sidebar() {
                   : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
-            <span className="flex w-5 justify-center text-base">
+            <span className="flex w-5 shrink-0 justify-center text-base">
               ⚙
             </span>
 
-            Settings
+            {t.nav.settings}
           </Link>
 
           {/* User profile */}
@@ -379,8 +581,8 @@ export default function Sidebar() {
             <button
               type="button"
               onClick={handleLogout}
-              title="Log out"
-              aria-label="Log out"
+              title={t.nav.logout}
+              aria-label={t.nav.logout}
               className={`mt-3 flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-bold shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg ${
                 darkMode
                   ? "border-red-900/50 bg-red-950/40 text-red-400 hover:border-red-700 hover:bg-red-900/70 hover:text-red-300"
@@ -391,7 +593,7 @@ export default function Sidebar() {
                 ↪
               </span>
 
-              Logout
+              {t.nav.logout}
             </button>
           </div>
         </div>

@@ -1,0 +1,3185 @@
+"use client";
+
+import Sidebar from "../components/Sidebar";
+import { useLanguage } from "../language-provider";
+import EmojiPicker, {
+  EmojiClickData,
+  Theme,
+} from "emoji-picker-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+
+type User = {
+  id: number;
+  username: string;
+  email: string;
+};
+
+type Message = {
+  id: number;
+  sender_id: number;
+  receiver_id: number;
+  message: string;
+  is_read: number;
+  is_pinned?: boolean;
+  created_at: string;
+  attachment_name?: string | null;
+  attachment_type?: string | null;
+  attachment_url?: string | null;
+  attachment_size?: number | null;
+  reply_to_id?: number | null;
+  reply_to_message?: string | null;
+  reply_to_sender_id?: number | null;
+  reply_to_sender_username?: string | null;
+  edited_at?: string | null;
+  deleted_at?: string | null;
+};
+
+type Conversation = {
+  user: User;
+  lastMessage: Message | null;
+  unreadCount: number;
+};
+
+type PresenceMap = Record<number, boolean>;
+
+export default function PrivateChatPage() {
+  const { language, t } = useLanguage();
+
+  const [darkMode, setDarkMode] = useState(false);
+
+  const [currentUser, setCurrentUser] =
+    useState<User | null>(null);
+
+  const [conversations, setConversations] =
+    useState<Conversation[]>([]);
+
+  const [users, setUsers] = useState<User[]>([]);
+
+  const [search, setSearch] = useState("");
+
+  const [showNewChat, setShowNewChat] =
+    useState(false);
+
+  const [selectedUser, setSelectedUser] =
+    useState<User | null>(null);
+
+  const [messages, setMessages] =
+    useState<Message[]>([]);
+
+  const [pinnedMessageIndex, setPinnedMessageIndex] =
+    useState(0);
+
+  const [messageText, setMessageText] =
+    useState("");
+
+  const [selectedFile, setSelectedFile] =
+    useState<File | null>(null);
+
+  const [filePreview, setFilePreview] =
+    useState("");
+
+  const [isRecordingAudio, setIsRecordingAudio] =
+    useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+
+  const [showEmojiPicker, setShowEmojiPicker] =
+    useState(false);
+
+  const [loadingConversations, setLoadingConversations] =
+    useState(true);
+
+  const [loadingUsers, setLoadingUsers] =
+    useState(false);
+
+  const [loadingMessages, setLoadingMessages] =
+    useState(false);
+
+  const [sending, setSending] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [replyingTo, setReplyingTo] =
+    useState<Message | null>(null);
+
+  const [editingMessage, setEditingMessage] =
+    useState<Message | null>(null);
+
+  const [messageActionId, setMessageActionId] =
+    useState<number | null>(null);
+
+  const [presence, setPresence] =
+    useState<PresenceMap>({});
+
+  const [notificationsSupported, setNotificationsSupported] =
+    useState(false);
+
+  const [notificationsEnabled, setNotificationsEnabled] =
+    useState(false);
+
+  const previousUnreadRef =
+    useRef<Record<number, number>>({});
+
+  const isPageVisibleRef =
+    useRef(true);
+
+  const messagesEndRef =
+    useRef<HTMLDivElement | null>(null);
+
+  const messagesContainerRef =
+    useRef<HTMLDivElement | null>(null);
+
+  const fileInputRef =
+    useRef<HTMLInputElement | null>(null);
+
+  const textareaRef =
+    useRef<HTMLTextAreaElement | null>(null);
+
+  const emojiPickerRef =
+    useRef<HTMLDivElement | null>(null);
+
+  const isArabic =
+    language === "ar";
+
+  function scrollToBottom(
+    behavior: ScrollBehavior = "auto"
+  ) {
+    const container =
+      messagesContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior,
+      });
+    });
+  }
+
+  function isNearBottom() {
+    const container =
+      messagesContainerRef.current;
+
+    if (!container) {
+      return true;
+    }
+
+    const distanceFromBottom =
+      container.scrollHeight -
+      container.scrollTop -
+      container.clientHeight;
+
+    return distanceFromBottom <= 120;
+  }
+
+  useEffect(() => {
+    const savedDarkMode =
+      localStorage.getItem(
+        "studyhubDarkMode"
+      );
+
+    setDarkMode(
+      savedDarkMode === "true"
+    );
+
+    function updateDarkMode() {
+      setDarkMode(
+        localStorage.getItem(
+          "studyhubDarkMode"
+        ) === "true"
+      );
+    }
+
+    window.addEventListener(
+      "studyhub-dark-mode-updated",
+      updateDarkMode
+    );
+
+    window.addEventListener(
+      "storage",
+      updateDarkMode
+    );
+
+    return () => {
+      window.removeEventListener(
+        "studyhub-dark-mode-updated",
+        updateDarkMode
+      );
+
+      window.removeEventListener(
+        "storage",
+        updateDarkMode
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const updateVisibility = () => {
+      isPageVisibleRef.current =
+        document.visibilityState === "visible";
+    };
+
+    updateVisibility();
+
+    document.addEventListener(
+      "visibilitychange",
+      updateVisibility
+    );
+
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        updateVisibility
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window)
+    ) {
+      setNotificationsSupported(false);
+      return;
+    }
+
+    setNotificationsSupported(true);
+
+    setNotificationsEnabled(
+      Notification.permission === "granted"
+    );
+  }, []);
+
+  useEffect(() => {
+    loadConversations();
+    updatePresence();
+
+    const conversationInterval =
+      window.setInterval(() => {
+        loadConversations(true);
+      }, 3000);
+
+    const presenceInterval =
+      window.setInterval(() => {
+        updatePresence();
+      }, 5000);
+
+    const heartbeatInterval =
+      window.setInterval(() => {
+        sendPresenceHeartbeat();
+      }, 10000);
+
+    const handleBeforeUnload = () => {
+      sendPresenceHeartbeat();
+    };
+
+    window.addEventListener(
+      "beforeunload",
+      handleBeforeUnload
+    );
+
+    return () => {
+      window.clearInterval(
+        conversationInterval
+      );
+
+      window.clearInterval(
+        presenceInterval
+      );
+
+      window.clearInterval(
+        heartbeatInterval
+      );
+
+      window.removeEventListener(
+        "beforeunload",
+        handleBeforeUnload
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedUser) {
+      setMessages([]);
+      setPinnedMessageIndex(0);
+
+      return;
+    }
+
+    setPinnedMessageIndex(0);
+
+    loadMessages(
+      selectedUser.id
+    );
+
+    const interval =
+      window.setInterval(() => {
+        loadMessages(
+          selectedUser.id,
+          true
+        );
+      }, 1500);
+
+    return () => {
+      window.clearInterval(
+        interval
+      );
+    };
+  }, [selectedUser]);
+
+  useEffect(() => {
+    if (!showNewChat) {
+      return;
+    }
+
+    loadUsers();
+  }, [search, showNewChat]);
+
+  useEffect(() => {
+    return () => {
+      if (filePreview) {
+        URL.revokeObjectURL(
+          filePreview
+        );
+      }
+    };
+  }, [filePreview]);
+
+  useEffect(() => {
+    function handleOutsideClick(
+      event: MouseEvent
+    ) {
+      if (
+        emojiPickerRef.current &&
+        !emojiPickerRef.current.contains(
+          event.target as Node
+        )
+      ) {
+        setShowEmojiPicker(false);
+      }
+    }
+
+    if (showEmojiPicker) {
+      document.addEventListener(
+        "mousedown",
+        handleOutsideClick
+      );
+    }
+
+    return () => {
+      document.removeEventListener(
+        "mousedown",
+        handleOutsideClick
+      );
+    };
+  }, [showEmojiPicker]);
+
+  async function readResponse(
+    response: Response
+  ) {
+    const contentType =
+      response.headers.get(
+        "content-type"
+      ) || "";
+
+    if (
+      contentType.includes(
+        "application/json"
+      )
+    ) {
+      return response.json();
+    }
+
+    const text =
+      await response.text();
+
+    throw new Error(
+      `API Error (${response.status}): ${
+        text.slice(0, 300) ||
+        "Unknown server error"
+      }`
+    );
+  }
+
+  async function sendPresenceHeartbeat() {
+    try {
+      await fetch(
+        "/api/private-chat/presence",
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+          keepalive: true,
+        }
+      );
+    } catch (err) {
+      console.error(
+        "Presence heartbeat error:",
+        err
+      );
+    }
+  }
+
+  async function updatePresence() {
+    try {
+      const response = await fetch(
+        "/api/private-chat/presence",
+        {
+          cache: "no-store",
+        }
+      );
+
+      const data =
+        await readResponse(response);
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to load presence."
+        );
+      }
+
+      setPresence(
+        data.presence || {}
+      );
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function enableNotifications() {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window)
+    ) {
+      setError(
+        isArabic
+          ? "المتصفح لا يدعم إشعارات سطح المكتب."
+          : "This browser does not support desktop notifications."
+      );
+
+      return;
+    }
+
+    try {
+      const permission =
+        await Notification.requestPermission();
+
+      setNotificationsEnabled(
+        permission === "granted"
+      );
+
+      if (
+        permission !== "granted"
+      ) {
+        setError(
+          isArabic
+            ? "لم يتم السماح بإشعارات الرسائل."
+            : "Message notifications were not enabled."
+        );
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  function showNewMessageNotification(
+    conversation: Conversation
+  ) {
+    if (
+      typeof window === "undefined" ||
+      !("Notification" in window) ||
+      Notification.permission !== "granted"
+    ) {
+      return;
+    }
+
+    const message =
+      conversation.lastMessage;
+
+    if (!message) {
+      return;
+    }
+
+    const senderIsOtherUser =
+      message.sender_id !==
+      currentUser?.id;
+
+    if (!senderIsOtherUser) {
+      return;
+    }
+
+    if (
+      isPageVisibleRef.current &&
+      selectedUser?.id ===
+        conversation.user.id
+    ) {
+      return;
+    }
+
+    const body =
+      getMessagePreview(message);
+
+    const notification =
+      new Notification(
+        `${conversation.user.username} • ${
+          isArabic
+            ? "رسالة جديدة"
+            : "New message"
+        }`,
+        {
+          body,
+          tag: `studyhub-private-chat-${conversation.user.id}`,
+        }
+      );
+
+    notification.onclick = () => {
+      window.focus();
+
+      openConversation(
+        conversation.user
+      );
+
+      notification.close();
+    };
+  }
+
+  async function loadConversations(
+    silent = false
+  ) {
+    try {
+      if (!silent) {
+        setLoadingConversations(
+          true
+        );
+      }
+
+      const response =
+        await fetch(
+          "/api/private-chat/conversations",
+          {
+            cache: "no-store",
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to load conversations."
+        );
+      }
+
+      setCurrentUser(
+        data.currentUser
+      );
+
+      const nextConversations =
+        data.conversations || [];
+
+      if (silent) {
+        nextConversations.forEach(
+          (conversation: Conversation) => {
+            const previousUnread =
+              previousUnreadRef.current[
+                conversation.user.id
+              ] || 0;
+
+            if (
+              conversation.unreadCount >
+                previousUnread
+            ) {
+              showNewMessageNotification(
+                conversation
+              );
+            }
+          }
+        );
+      }
+
+      const nextUnreadMap: Record<
+        number,
+        number
+      > = {};
+
+      nextConversations.forEach(
+        (conversation: Conversation) => {
+          nextUnreadMap[
+            conversation.user.id
+          ] = conversation.unreadCount;
+        }
+      );
+
+      previousUnreadRef.current =
+        nextUnreadMap;
+
+      setConversations(
+        nextConversations
+      );
+    } catch (err) {
+      console.error(err);
+
+      if (!silent) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load conversations."
+        );
+      }
+    } finally {
+      if (!silent) {
+        setLoadingConversations(
+          false
+        );
+      }
+    }
+  }
+
+  async function loadUsers() {
+    try {
+      setLoadingUsers(true);
+
+      const response =
+        await fetch(
+          `/api/private-chat/users?search=${encodeURIComponent(
+            search
+          )}`,
+          {
+            cache: "no-store",
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to load users."
+        );
+      }
+
+      setCurrentUser(
+        data.currentUser
+      );
+
+      setUsers(
+        data.users || []
+      );
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load users."
+      );
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
+
+  async function loadMessages(
+    userId: number,
+    silent = false
+  ) {
+    try {
+      if (!silent) {
+        setLoadingMessages(true);
+      }
+
+      const response =
+        await fetch(
+          `/api/private-chat/messages?userId=${userId}`,
+          {
+            cache: "no-store",
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to load messages."
+        );
+      }
+
+      setCurrentUser(
+        data.currentUser
+      );
+
+      setMessages(
+        data.messages || []
+      );
+
+      /*
+       * مهم جدًا:
+       * الـ polling الصامت لا يعمل أي scroll.
+       *
+       * الـ scroll لآخر الرسائل يحصل فقط
+       * عند أول تحميل للمحادثة.
+       */
+      if (!silent) {
+        scrollToBottom("auto");
+      }
+
+      if (silent) {
+        loadConversations(true);
+      }
+    } catch (err) {
+      console.error(err);
+
+      if (!silent) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load messages."
+        );
+      }
+    } finally {
+      if (!silent) {
+        setLoadingMessages(false);
+      }
+    }
+  }
+
+  async function startAudioRecording() {
+    if (isRecordingAudio || selectedFile) return;
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError(isArabic ? "التسجيل الصوتي غير مدعوم في هذا المتصفح." : "Audio recording is not supported in this browser.");
+      return;
+    }
+
+    try {
+      setError("");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+      audioChunksRef.current = [];
+
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+      ];
+      const mimeType = candidates.find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      recorder.onerror = () => {
+        setError(isArabic ? "حدث خطأ أثناء التسجيل." : "An audio recording error occurred.");
+      };
+
+      recorder.onstop = () => {
+        const type = recorder.mimeType || "audio/webm";
+        const blob = new Blob(audioChunksRef.current, { type });
+        audioChunksRef.current = [];
+
+        audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+        audioStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setIsRecordingAudio(false);
+
+        if (!blob.size) {
+          setError(isArabic ? "التسجيل فارغ، حاولي مرة أخرى." : "The recording is empty. Try again.");
+          return;
+        }
+
+        if (blob.size > 10 * 1024 * 1024) {
+          setError(isArabic ? "حجم التسجيل أكبر من 10 ميجابايت." : "Recording exceeds the 10 MB limit.");
+          return;
+        }
+
+        const ext = type.includes("ogg") ? "ogg" : type.includes("mp4") ? "mp4" : "webm";
+        const file = new File([blob], `voice-message-${Date.now()}.${ext}`, { type });
+
+        if (filePreview) URL.revokeObjectURL(filePreview);
+        setSelectedFile(file);
+        setFilePreview(URL.createObjectURL(file));
+      };
+
+      recorder.start();
+      setIsRecordingAudio(true);
+    } catch {
+      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setIsRecordingAudio(false);
+      setError(isArabic
+        ? "تعذر الوصول للميكروفون. اسمحي للمتصفح باستخدامه ثم حاولي مجددًا."
+        : "Microphone access failed. Allow microphone permission and try again.");
+    }
+  }
+
+  function stopAudioRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }
+  function handleFileChange(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file =
+      event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (
+      file.size >
+      10 * 1024 * 1024
+    ) {
+      setError(
+        isArabic
+          ? "حجم الملف كبير جدًا. الحد الأقصى 10 ميجابايت."
+          : "File is too large. Maximum size is 10 MB."
+      );
+
+      event.target.value = "";
+
+      return;
+    }
+
+    setError("");
+    setSelectedFile(file);
+
+    if (
+      file.type.startsWith(
+        "image/"
+      )
+    ) {
+      const url =
+        URL.createObjectURL(
+          file
+        );
+
+      setFilePreview(url);
+    } else {
+      setFilePreview("");
+    }
+  }
+
+  function removeSelectedFile() {
+    if (filePreview) {
+      URL.revokeObjectURL(
+        filePreview
+      );
+    }
+
+    setFilePreview("");
+    setSelectedFile(null);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value =
+        "";
+    }
+  }
+
+  function handleEmojiClick(
+    emojiData: EmojiClickData
+  ) {
+    setMessageText(
+      (current) =>
+        current + emojiData.emoji
+    );
+  }
+
+  async function sendMessage() {
+    if (!selectedUser) {
+      return;
+    }
+
+    const cleanMessage =
+      messageText.trim();
+
+    if (
+      !cleanMessage &&
+      !selectedFile
+    ) {
+      return;
+    }
+
+    if (sending) {
+      return;
+    }
+
+    try {
+      setSending(true);
+      setError("");
+      setShowEmojiPicker(false);
+
+      const formData =
+        new FormData();
+
+      formData.append(
+        "receiverId",
+        String(
+          selectedUser.id
+        )
+      );
+
+      formData.append(
+        "message",
+        cleanMessage
+      );
+
+      if (replyingTo) {
+        formData.append(
+          "replyToId",
+          String(replyingTo.id)
+        );
+      }
+
+      if (selectedFile) {
+        formData.append(
+          "file",
+          selectedFile
+        );
+      }
+
+      const response =
+        await fetch(
+          "/api/private-chat/messages",
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to send message."
+        );
+      }
+
+      setMessages(
+        (current) => [
+          ...current,
+          data.message,
+        ]
+      );
+
+      setMessageText("");
+      setReplyingTo(null);
+      setEditingMessage(null);
+
+      removeSelectedFile();
+
+      await loadConversations(
+        true
+      );
+
+      /*
+       * نعمل scroll بعد إضافة الرسالة
+       * وليس بسبب تغيير messages بشكل عام.
+       */
+      scrollToBottom("smooth");
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to send message."
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function startReply(message: Message) {
+    setReplyingTo(message);
+    setEditingMessage(null);
+    setShowEmojiPicker(false);
+
+    window.setTimeout(
+      () =>
+        textareaRef.current?.focus(),
+      0
+    );
+  }
+
+  function startEdit(message: Message) {
+    if (
+      message.sender_id !==
+        currentUser?.id ||
+      message.deleted_at
+    ) {
+      return;
+    }
+
+    setEditingMessage(message);
+    setReplyingTo(null);
+    setMessageText(message.message);
+    setShowEmojiPicker(false);
+
+    window.setTimeout(
+      () =>
+        textareaRef.current?.focus(),
+      0
+    );
+  }
+
+  function cancelMessageAction() {
+    setReplyingTo(null);
+    setEditingMessage(null);
+    setMessageText("");
+  }
+
+  async function copyMessage(
+    message: Message
+  ) {
+    if (
+      !message.message ||
+      message.deleted_at
+    ) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        message.message
+      );
+    } catch {
+      setError(
+        isArabic
+          ? "تعذر نسخ الرسالة."
+          : "Could not copy the message."
+      );
+    }
+  }
+
+  async function editMessage() {
+    if (!editingMessage) {
+      return;
+    }
+
+    const text =
+      messageText.trim();
+
+    if (
+      !text ||
+      messageActionId !== null
+    ) {
+      return;
+    }
+
+    try {
+      setMessageActionId(
+        editingMessage.id
+      );
+
+      setError("");
+
+      const response =
+        await fetch(
+          "/api/private-chat/messages",
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              action: "edit",
+              messageId:
+                editingMessage.id,
+              message: text,
+            }),
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to edit message."
+        );
+      }
+
+      setMessages(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              editingMessage.id
+                ? data.message
+                : item
+          )
+      );
+
+      setEditingMessage(null);
+      setMessageText("");
+
+      await loadConversations(
+        true
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to edit message."
+      );
+    } finally {
+      setMessageActionId(null);
+    }
+  }
+
+  async function deleteMessage(
+    message: Message
+  ) {
+    if (
+      message.sender_id !==
+        currentUser?.id ||
+      messageActionId !== null
+    ) {
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        isArabic
+          ? "هل تريد حذف هذه الرسالة؟"
+          : "Delete this message?"
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setMessageActionId(
+        message.id
+      );
+
+      setError("");
+
+      const response =
+        await fetch(
+          "/api/private-chat/messages",
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              messageId:
+                message.id,
+            }),
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to delete message."
+        );
+      }
+
+      setMessages(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              message.id
+                ? {
+                    ...item,
+                    message: "",
+                    attachment_name:
+                      null,
+                    attachment_type:
+                      null,
+                    attachment_url:
+                      null,
+                    attachment_size:
+                      null,
+                    deleted_at:
+                      new Date().toISOString(),
+                  }
+                : item
+          )
+      );
+
+      if (
+        editingMessage?.id ===
+        message.id
+      ) {
+        cancelMessageAction();
+      }
+
+      await loadConversations(
+        true
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete message."
+      );
+    } finally {
+      setMessageActionId(null);
+    }
+  }
+
+  async function togglePinMessage(
+    message: Message
+  ) {
+    if (
+      messageActionId !== null
+    ) {
+      return;
+    }
+
+    try {
+      setMessageActionId(
+        message.id
+      );
+
+      setError("");
+
+      const response =
+        await fetch(
+          "/api/private-chat/messages",
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              action: "pin",
+              messageId:
+                message.id,
+              isPinned:
+                !message.is_pinned,
+            }),
+          }
+        );
+
+      const data =
+        await readResponse(
+          response
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Failed to update pinned message."
+        );
+      }
+
+      setMessages(
+        (current) =>
+          current.map(
+            (item) => {
+              if (
+                item.id ===
+                message.id
+              ) {
+                return data.message;
+              }
+
+              if (
+                data.unpinnedMessageId &&
+                item.id ===
+                  data.unpinnedMessageId
+              ) {
+                return {
+                  ...item,
+                  is_pinned: false,
+                };
+              }
+
+              return item;
+            }
+          )
+      );
+
+      if (message.is_pinned) {
+        setPinnedMessageIndex(
+          (currentIndex) =>
+            Math.max(
+              0,
+              currentIndex - 1
+            )
+        );
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update pinned message."
+      );
+    } finally {
+      setMessageActionId(null);
+    }
+  }
+
+  function scrollToMessage(
+    messageId: number
+  ) {
+    const messageElement =
+      document.getElementById(
+        `private-message-${messageId}`
+      );
+
+    if (!messageElement) {
+      return;
+    }
+
+    messageElement.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    messageElement.classList.add(
+      "ring-2",
+      "ring-amber-400",
+      "rounded-2xl"
+    );
+
+    window.setTimeout(() => {
+      messageElement.classList.remove(
+        "ring-2",
+        "ring-amber-400",
+        "rounded-2xl"
+      );
+    }, 1800);
+  }
+
+  function openConversation(
+    user: User
+  ) {
+    setSelectedUser(user);
+    setShowNewChat(false);
+    setSearch("");
+    setError("");
+    setShowEmojiPicker(false);
+    setReplyingTo(null);
+    setEditingMessage(null);
+    setMessageText("");
+    setPinnedMessageIndex(0);
+  }
+
+  function handleMessageKeyDown(
+    event: React.KeyboardEvent<HTMLTextAreaElement>
+  ) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+
+      if (editingMessage) {
+        editMessage();
+      } else {
+        sendMessage();
+      }
+    }
+  }
+
+  function formatTime(
+    dateString: string
+  ) {
+    try {
+      return new Date(
+        dateString
+      ).toLocaleTimeString(
+        language === "ar"
+          ? "ar-EG"
+          : language === "en"
+            ? "en-US"
+            : undefined,
+        {
+          hour: "2-digit",
+          minute: "2-digit",
+        }
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  function formatConversationTime(
+    dateString:
+      | string
+      | undefined
+  ) {
+    if (!dateString) {
+      return "";
+    }
+
+    try {
+      const date =
+        new Date(
+          dateString
+        );
+
+      const now =
+        new Date();
+
+      const sameDay =
+        date.toDateString() ===
+        now.toDateString();
+
+      if (sameDay) {
+        return formatTime(
+          dateString
+        );
+      }
+
+      return date.toLocaleDateString(
+        language === "ar"
+          ? "ar-EG"
+          : language === "en"
+            ? "en-US"
+            : undefined,
+        {
+          month: "short",
+          day: "numeric",
+        }
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  function formatFileSize(
+    size: number | null | undefined
+  ) {
+    if (!size) {
+      return "";
+    }
+
+    if (
+      size <
+      1024
+    ) {
+      return `${size} B`;
+    }
+
+    if (
+      size <
+      1024 * 1024
+    ) {
+      return `${(
+        size / 1024
+      ).toFixed(1)} KB`;
+    }
+
+    return `${(
+      size /
+      (1024 * 1024)
+    ).toFixed(1)} MB`;
+  }
+
+  function getFileIcon(
+    type: string | null | undefined
+  ) {
+    if (
+      type?.startsWith(
+        "image/"
+      )
+    ) {
+      return "🖼️";
+    }
+
+    if (
+      type ===
+      "application/pdf"
+    ) {
+      return "📕";
+    }
+
+    if (
+      type?.includes(
+        "word"
+      )
+    ) {
+      return "📘";
+    }
+
+    if (
+      type?.includes(
+        "excel"
+      ) ||
+      type?.includes(
+        "spreadsheet"
+      )
+    ) {
+      return "📗";
+    }
+
+    if (
+      type?.includes(
+        "powerpoint"
+      ) ||
+      type?.includes(
+        "presentation"
+      )
+    ) {
+      return "📙";
+    }
+
+    if (
+      type?.includes(
+        "zip"
+      ) ||
+      type?.includes(
+        "rar"
+      )
+    ) {
+      return "🗜️";
+    }
+
+    return "📎";
+  }
+
+  function renderAttachment(
+    message: Message,
+    mine: boolean
+  ) {
+    if (
+      !message.attachment_url
+    ) {
+      return null;
+    }
+
+    const isImage =
+      message.attachment_type?.startsWith(
+        "image/"
+      );
+
+    const isAudio =
+      message.attachment_type?.startsWith("audio/") ||
+      /\.(webm|mp3|wav|ogg|m4a|aac|mp4)$/i.test(message.attachment_name || "");
+
+    if (isAudio) {
+      return (
+        <div className="mb-2 max-w-full rounded-xl p-2">
+          <p className="mb-2 truncate text-sm">
+            {message.attachment_name || (isArabic ? "رسالة صوتية" : "Voice message")}
+          </p>
+          <audio controls preload="metadata" src={message.attachment_url} className="w-full max-w-sm">
+            {isArabic ? "المتصفح لا يدعم تشغيل الصوت." : "Your browser does not support audio playback."}
+          </audio>
+        </div>
+      );
+    }
+
+    if (isImage) {
+      return (
+        <a
+          href={
+            message.attachment_url
+          }
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-2 block overflow-hidden rounded-xl"
+        >
+          <img
+            src={
+              message.attachment_url
+            }
+            alt={
+              message.attachment_name ||
+              "Image"
+            }
+            className="max-h-80 w-full max-w-sm rounded-xl object-cover transition hover:opacity-90"
+          />
+        </a>
+      );
+    }
+
+    return (
+      <a
+        href={
+          message.attachment_url
+        }
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`mb-2 flex items-center gap-3 rounded-xl border p-3 transition ${
+          mine
+            ? "border-indigo-400/30 bg-indigo-500/20 hover:bg-indigo-500/30"
+            : darkMode
+              ? "border-slate-700 bg-slate-900 hover:bg-slate-700"
+              : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+        }`}
+      >
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-xl">
+          {getFileIcon(
+            message.attachment_type
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">
+            {
+              message.attachment_name
+            }
+          </p>
+
+          <p
+            className={`mt-1 text-[11px] ${
+              mine
+                ? "text-indigo-100"
+                : darkMode
+                  ? "text-slate-400"
+                  : "text-slate-500"
+            }`}
+          >
+            {formatFileSize(
+              message.attachment_size
+            )}{" "}
+            •{" "}
+            {isArabic
+              ? "فتح الملف"
+              : "Open file"}
+          </p>
+        </div>
+      </a>
+    );
+  }
+
+  function isUserOnline(
+    userId: number
+  ) {
+    return Boolean(
+      presence[userId]
+    );
+  }
+
+  function getPresenceLabel(
+    userId: number
+  ) {
+    if (isUserOnline(userId)) {
+      return isArabic
+        ? "متصل الآن"
+        : "Online";
+    }
+
+    return isArabic
+      ? "غير متصل"
+      : "Offline";
+  }
+
+  function getMessagePreview(
+    message: Message | null
+  ) {
+    if (!message) {
+      return isArabic
+        ? "ابدأ المحادثة"
+        : "Start chatting";
+    }
+
+    if (
+      message.message
+    ) {
+      return message.message;
+    }
+
+    if (
+      message.attachment_name
+    ) {
+      return `📎 ${message.attachment_name}`;
+    }
+
+    return isArabic
+      ? "مرفق"
+      : "Attachment";
+  }
+
+  const selectedConversation =
+    selectedUser
+      ? conversations.find(
+          (conversation) =>
+            conversation.user.id ===
+            selectedUser.id
+        )
+      : null;
+
+  const totalUnread =
+    conversations.reduce(
+      (
+        total,
+        conversation
+      ) =>
+        total +
+        conversation.unreadCount,
+      0
+    );
+
+  const pinnedMessages =
+    messages.filter(
+      (message) =>
+        Boolean(message.is_pinned)
+    );
+
+  const currentPinnedIndex =
+    pinnedMessages.length === 0
+      ? 0
+      : Math.min(
+          pinnedMessageIndex,
+          pinnedMessages.length - 1
+        );
+
+  const currentPinnedMessage =
+    pinnedMessages.length > 0
+      ? pinnedMessages[
+          currentPinnedIndex
+        ]
+      : null;
+
+  return (
+    <main
+      dir={
+        isArabic
+          ? "rtl"
+          : "ltr"
+      }
+      className={`min-h-screen ${
+        darkMode
+          ? "bg-slate-950 text-white"
+          : "bg-slate-100 text-slate-900"
+      }`}
+    >
+      <Sidebar />
+
+      <div className="min-h-screen lg:ml-64">
+        <div className="mx-auto flex min-h-screen max-w-7xl flex-col p-3 sm:p-5 lg:p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold">
+                {t.nav.privateChat}
+              </h1>
+
+              <p
+                className={`mt-1 text-sm ${
+                  darkMode
+                    ? "text-slate-400"
+                    : "text-slate-500"
+                }`}
+              >
+                {isArabic
+                  ? "رسائلك ومحادثاتك الخاصة"
+                  : "Your private conversations and messages"}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {notificationsSupported &&
+                !notificationsEnabled && (
+                  <button
+                    type="button"
+                    onClick={
+                      enableNotifications
+                    }
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                      darkMode
+                        ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                        : "bg-white text-slate-600 hover:bg-slate-200"
+                    }`}
+                    title={
+                      isArabic
+                        ? "تفعيل إشعارات الرسائل"
+                        : "Enable message notifications"
+                    }
+                  >
+                    🔔{" "}
+                    {isArabic
+                      ? "تفعيل الإشعارات"
+                      : "Enable notifications"}
+                  </button>
+                )}
+
+              {totalUnread >
+                0 && (
+                <div className="rounded-full bg-indigo-600 px-3 py-1 text-xs font-bold text-white">
+                  {totalUnread}{" "}
+                  {isArabic
+                    ? "غير مقروءة"
+                    : "unread"}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {error && (
+            <div className="mb-4 flex items-center justify-between rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+              <span>
+                {error}
+              </span>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setError("")
+                }
+                className="ml-4 text-lg"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          <div
+            className={`grid min-h-[calc(100vh-145px)] flex-1 overflow-hidden rounded-2xl border shadow-sm lg:grid-cols-[330px_1fr] ${
+              darkMode
+                ? "border-slate-800 bg-slate-900"
+                : "border-slate-200 bg-white"
+            }`}
+          >
+            <aside
+              className={`${
+                selectedUser
+                  ? "hidden lg:flex"
+                  : "flex"
+              } min-h-0 flex-col ${
+                isArabic
+                  ? "lg:border-l"
+                  : "lg:border-r"
+              } ${
+                darkMode
+                  ? "border-slate-800"
+                  : "border-slate-200"
+              }`}
+            >
+              <div
+                className={`border-b p-4 ${
+                  darkMode
+                    ? "border-slate-800"
+                    : "border-slate-200"
+                }`}
+              >
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <h2 className="font-bold">
+                      {isArabic
+                        ? "المحادثات"
+                        : "Conversations"}
+                    </h2>
+
+                    <p
+                      className={`mt-0.5 text-xs ${
+                        darkMode
+                          ? "text-slate-500"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {
+                        conversations.length
+                      }{" "}
+                      {isArabic
+                        ? "محادثة"
+                        : "conversations"}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewChat(
+                        true
+                      );
+                      setSelectedUser(
+                        null
+                      );
+                      setSearch("");
+                      setShowEmojiPicker(
+                        false
+                      );
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-xl font-medium text-white transition hover:bg-indigo-700"
+                  >
+                    +
+                  </button>
+                </div>
+
+                {showNewChat && (
+                  <input
+                    autoFocus
+                    value={search}
+                    onChange={(event) =>
+                      setSearch(
+                        event.target.value
+                      )
+                    }
+                    placeholder={
+                      isArabic
+                        ? "ابحث عن مستخدم..."
+                        : "Search users..."
+                    }
+                    className={`w-full rounded-xl border px-4 py-3 text-sm outline-none transition focus:ring-2 focus:ring-indigo-500 ${
+                      darkMode
+                        ? "border-slate-700 bg-slate-950 text-white placeholder:text-slate-500"
+                        : "border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400"
+                    }`}
+                  />
+                )}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {showNewChat ? (
+                  <>
+                    <div
+                      className={`px-4 py-3 text-xs font-semibold uppercase tracking-wide ${
+                        darkMode
+                          ? "text-slate-500"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {isArabic
+                        ? "ابدأ محادثة جديدة"
+                        : "Start a new conversation"}
+                    </div>
+
+                    {loadingUsers ? (
+                      <div className="p-5 text-center text-sm text-slate-500">
+                        {isArabic
+                          ? "جاري البحث..."
+                          : "Searching..."}
+                      </div>
+                    ) : users.length ===
+                      0 ? (
+                      <div className="p-5 text-center text-sm text-slate-500">
+                        {isArabic
+                          ? "لا يوجد مستخدمون"
+                          : "No users found"}
+                      </div>
+                    ) : (
+                      users.map(
+                        (user) => (
+                          <button
+                            key={
+                              user.id
+                            }
+                            type="button"
+                            onClick={() =>
+                              openConversation(
+                                user
+                              )
+                            }
+                            className={`flex w-full items-center gap-3 px-4 py-3 transition ${
+                              isArabic
+                                ? "text-right"
+                                : "text-left"
+                            } ${
+                              darkMode
+                                ? "hover:bg-slate-800"
+                                : "hover:bg-slate-50"
+                            }`}
+                          >
+                            <div className="relative shrink-0">
+                              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-600 font-bold text-white">
+                                {user.username
+                                  .charAt(
+                                    0
+                                  )
+                                  .toUpperCase()}
+                              </div>
+
+                              {isUserOnline(
+                                user.id
+                              ) && (
+                                <span
+                                  className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 dark:border-slate-900"
+                                  title={
+                                    isArabic
+                                      ? "متصل الآن"
+                                      : "Online"
+                                  }
+                                />
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold">
+                                {
+                                  user.username
+                                }
+                              </p>
+
+                              <p
+                                className={`truncate text-xs ${
+                                  darkMode
+                                    ? "text-slate-500"
+                                    : "text-slate-400"
+                                }`}
+                              >
+                                {
+                                  user.email
+                                }
+                              </p>
+                            </div>
+                          </button>
+                        )
+                      )
+                    )}
+                  </>
+                ) : loadingConversations ? (
+                  <div className="p-6 text-center text-sm text-slate-500">
+                    {isArabic
+                      ? "جاري تحميل المحادثات..."
+                      : "Loading conversations..."}
+                  </div>
+                ) : conversations.length ===
+                  0 ? (
+                  <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+                    <div
+                      className={`mb-4 flex h-16 w-16 items-center justify-center rounded-full text-2xl ${
+                        darkMode
+                          ? "bg-slate-800"
+                          : "bg-slate-100"
+                      }`}
+                    >
+                      💬
+                    </div>
+
+                    <h3 className="font-semibold">
+                      {isArabic
+                        ? "لا توجد محادثات"
+                        : "No conversations yet"}
+                    </h3>
+
+                    <p
+                      className={`mt-2 text-xs ${
+                        darkMode
+                          ? "text-slate-500"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {isArabic
+                        ? "ابدأ محادثة جديدة مع أحد الطلاب."
+                        : "Start a new conversation with a student."}
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewChat(
+                          true
+                        );
+                        setSearch("");
+                      }}
+                      className="mt-4 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+                    >
+                      {isArabic
+                        ? "محادثة جديدة"
+                        : "New conversation"}
+                    </button>
+                  </div>
+                ) : (
+                  conversations.map(
+                    (
+                      conversation
+                    ) => {
+                      const user =
+                        conversation.user;
+
+                      const selected =
+                        selectedUser?.id ===
+                        user.id;
+
+                      const lastMessage =
+                        conversation.lastMessage;
+
+                      const mine =
+                        lastMessage?.sender_id ===
+                        currentUser?.id;
+
+                      return (
+                        <button
+                          key={
+                            user.id
+                          }
+                          type="button"
+                          onClick={() =>
+                            openConversation(
+                              user
+                            )
+                          }
+                          className={`flex w-full items-center gap-3 border-b px-4 py-3 transition ${
+                            isArabic
+                              ? "text-right"
+                              : "text-left"
+                          } ${
+                            darkMode
+                              ? "border-slate-800"
+                              : "border-slate-100"
+                          } ${
+                            selected
+                              ? darkMode
+                                ? "bg-indigo-500/15"
+                                : "bg-indigo-50"
+                              : darkMode
+                                ? "hover:bg-slate-800"
+                                : "hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className="relative shrink-0">
+                            <div
+                              className={`flex h-12 w-12 items-center justify-center rounded-full font-bold ${
+                                selected
+                                  ? "bg-indigo-600 text-white"
+                                  : darkMode
+                                    ? "bg-slate-700 text-slate-200"
+                                    : "bg-slate-200 text-slate-700"
+                              }`}
+                            >
+                              {user.username
+                                .charAt(
+                                  0
+                                )
+                                .toUpperCase()}
+                            </div>
+
+                            {isUserOnline(
+                              user.id
+                            ) && (
+                              <span
+                                className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-white bg-emerald-500 dark:border-slate-900"
+                                title={
+                                  isArabic
+                                    ? "متصل الآن"
+                                    : "Online"
+                                }
+                              />
+                            )}
+
+                            {conversation.unreadCount >
+                              0 && (
+                              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-bold text-white">
+                                {conversation.unreadCount >
+                                99
+                                  ? "99+"
+                                  : conversation.unreadCount}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p
+                                className={`truncate text-sm ${
+                                  conversation.unreadCount >
+                                  0
+                                    ? "font-bold"
+                                    : "font-semibold"
+                                }`}
+                              >
+                                {
+                                  user.username
+                                }
+                              </p>
+
+                              <span
+                                className={`shrink-0 text-[10px] ${
+                                  darkMode
+                                    ? "text-slate-500"
+                                    : "text-slate-400"
+                                }`}
+                              >
+                                {formatConversationTime(
+                                  lastMessage?.created_at
+                                )}
+                              </span>
+                            </div>
+
+                            <div className="mt-1 flex items-center gap-1">
+                              {mine && (
+                                <span
+                                  className={
+                                    lastMessage?.is_read
+                                      ? "text-indigo-500"
+                                      : darkMode
+                                        ? "text-slate-500"
+                                        : "text-slate-400"
+                                  }
+                                >
+                                  ✓✓
+                                </span>
+                              )}
+
+                              <p
+                                className={`truncate text-xs ${
+                                  conversation.unreadCount >
+                                  0
+                                    ? darkMode
+                                      ? "font-semibold text-slate-200"
+                                      : "font-semibold text-slate-700"
+                                    : darkMode
+                                      ? "text-slate-500"
+                                      : "text-slate-400"
+                                }`}
+                              >
+                                {getMessagePreview(
+                                  lastMessage
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    }
+                  )
+                )}
+              </div>
+            </aside>
+
+            <section
+              className={`${
+                selectedUser
+                  ? "flex"
+                  : "hidden lg:flex"
+              } min-h-0 flex-col`}
+            >
+              {!selectedUser ? (
+                <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+                  <div
+                    className={`mb-5 flex h-24 w-24 items-center justify-center rounded-full text-4xl ${
+                      darkMode
+                        ? "bg-slate-800"
+                        : "bg-slate-100"
+                    }`}
+                  >
+                    💬
+                  </div>
+
+                  <h2 className="text-xl font-bold">
+                    {isArabic
+                      ? "رسائلك الخاصة"
+                      : "Your private messages"}
+                  </h2>
+
+                  <p
+                    className={`mt-2 max-w-md text-sm ${
+                      darkMode
+                        ? "text-slate-400"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    {isArabic
+                      ? "اختر محادثة من القائمة أو ابدأ محادثة جديدة."
+                      : "Select a conversation or start a new one."}
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewChat(
+                        true
+                      );
+                      setSearch("");
+                    }}
+                    className="mt-5 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700"
+                  >
+                    +{" "}
+                    {isArabic
+                      ? "محادثة جديدة"
+                      : "New conversation"}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div
+                    className={`flex items-center gap-3 border-b px-4 py-3 sm:px-5 sm:py-4 ${
+                      darkMode
+                        ? "border-slate-800"
+                        : "border-slate-200"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedUser(
+                          null
+                        )
+                      }
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl lg:hidden ${
+                        darkMode
+                          ? "bg-slate-800 hover:bg-slate-700"
+                          : "bg-slate-100 hover:bg-slate-200"
+                      }`}
+                    >
+                      {isArabic
+                        ? "→"
+                        : "←"}
+                    </button>
+
+                    <div className="relative shrink-0">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-indigo-600 font-bold text-white">
+                        {selectedUser.username
+                          .charAt(
+                            0
+                          )
+                          .toUpperCase()}
+                      </div>
+
+                      {isUserOnline(
+                        selectedUser.id
+                      ) && (
+                        <span
+                          className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 dark:border-slate-900"
+                          title={
+                            isArabic
+                              ? "متصل الآن"
+                              : "Online"
+                          }
+                        />
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <h2 className="truncate font-semibold">
+                        {
+                          selectedUser.username
+                        }
+                      </h2>
+
+                      <p
+                        className={`truncate text-xs ${
+                          isUserOnline(
+                            selectedUser.id
+                          )
+                            ? "text-emerald-500"
+                            : darkMode
+                              ? "text-slate-500"
+                              : "text-slate-400"
+                        }`}
+                      >
+                        {getPresenceLabel(
+                          selectedUser.id
+                        )}
+                      </p>
+                    </div>
+
+                    {selectedConversation &&
+                      selectedConversation.unreadCount >
+                        0 && (
+                        <span className="rounded-full bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white">
+                          {
+                            selectedConversation.unreadCount
+                          }
+                        </span>
+                      )}
+                  </div>
+
+                  {currentPinnedMessage && (
+                    <div
+                      className={`border-b px-4 py-3 sm:px-5 ${
+                        darkMode
+                          ? "border-slate-800 bg-slate-900"
+                          : "border-slate-200 bg-amber-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={
+                            pinnedMessages.length <=
+                            1
+                          }
+                          onClick={() =>
+                            setPinnedMessageIndex(
+                              currentPinnedIndex ===
+                                0
+                                ? pinnedMessages.length -
+                                    1
+                                : currentPinnedIndex -
+                                    1
+                            )
+                          }
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg font-bold transition ${
+                            pinnedMessages.length <=
+                            1
+                              ? "cursor-not-allowed opacity-40"
+                              : darkMode
+                                ? "text-slate-200 hover:bg-slate-800"
+                                : "text-slate-700 hover:bg-amber-100"
+                          }`}
+                          aria-label={
+                            isArabic
+                              ? "الرسالة المثبتة السابقة"
+                              : "Previous pinned message"
+                          }
+                        >
+                          ←
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            scrollToMessage(
+                              currentPinnedMessage.id
+                            )
+                          }
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-base">
+                              📌
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p
+                                  className={`text-[11px] font-bold ${
+                                    darkMode
+                                      ? "text-amber-300"
+                                      : "text-amber-700"
+                                  }`}
+                                >
+                                  {isArabic
+                                    ? "رسالة مثبتة"
+                                    : "Pinned message"}
+                                </p>
+
+                                <span
+                                  className={`text-[10px] ${
+                                    darkMode
+                                      ? "text-slate-500"
+                                      : "text-slate-400"
+                                  }`}
+                                >
+                                  {currentPinnedIndex +
+                                    1}
+                                  /
+                                  {
+                                    pinnedMessages.length
+                                  }
+                                </span>
+                              </div>
+
+                              <p
+                                className={`truncate text-xs ${
+                                  darkMode
+                                    ? "text-slate-300"
+                                    : "text-slate-600"
+                                }`}
+                              >
+                                {currentPinnedMessage.message ||
+                                  (currentPinnedMessage.attachment_name
+                                    ? `📎 ${currentPinnedMessage.attachment_name}`
+                                    : isArabic
+                                      ? "رسالة مثبتة"
+                                      : "Pinned message")}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={
+                            pinnedMessages.length <=
+                            1
+                          }
+                          onClick={() =>
+                            setPinnedMessageIndex(
+                              currentPinnedIndex ===
+                                pinnedMessages.length -
+                                  1
+                                ? 0
+                                : currentPinnedIndex +
+                                    1
+                            )
+                          }
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg font-bold transition ${
+                            pinnedMessages.length <=
+                            1
+                              ? "cursor-not-allowed opacity-40"
+                              : darkMode
+                                ? "text-slate-200 hover:bg-slate-800"
+                                : "text-slate-700 hover:bg-amber-100"
+                          }`}
+                          aria-label={
+                            isArabic
+                              ? "الرسالة المثبتة التالية"
+                              : "Next pinned message"
+                          }
+                        >
+                          →
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            togglePinMessage(
+                              currentPinnedMessage
+                            )
+                          }
+                          disabled={
+                            messageActionId ===
+                            currentPinnedMessage.id
+                          }
+                          className={`shrink-0 rounded-xl px-2.5 py-1.5 text-[10px] font-semibold transition ${
+                            darkMode
+                              ? "text-amber-300 hover:bg-slate-800"
+                              : "text-amber-700 hover:bg-amber-100"
+                          }`}
+                        >
+                          {messageActionId ===
+                          currentPinnedMessage.id
+                            ? "..."
+                            : isArabic
+                              ? "إلغاء التثبيت"
+                              : "Unpin"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    ref={
+                      messagesContainerRef
+                    }
+                    className={`min-h-0 flex-1 overflow-y-auto p-4 sm:p-5 ${
+                      darkMode
+                        ? "bg-slate-950/50"
+                        : "bg-slate-50"
+                    }`}
+                  >
+                    {loadingMessages ? (
+                      <div className="flex h-full items-center justify-center">
+                        <div className="text-sm text-slate-500">
+                          {isArabic
+                            ? "جاري تحميل الرسائل..."
+                            : "Loading messages..."}
+                        </div>
+                      </div>
+                    ) : messages.length ===
+                      0 ? (
+                      <div className="flex h-full items-center justify-center">
+                        <div className="text-center">
+                          <div className="mb-3 text-3xl">
+                            👋
+                          </div>
+
+                          <p
+                            className={`text-sm ${
+                              darkMode
+                                ? "text-slate-400"
+                                : "text-slate-500"
+                            }`}
+                          >
+                            {isArabic
+                              ? `ابدأ المحادثة مع ${selectedUser.username}`
+                              : `Start a conversation with ${selectedUser.username}`}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mx-auto max-w-4xl space-y-2">
+                        {messages.map(
+                          (message) => {
+                            const mine =
+                              message.sender_id ===
+                              currentUser?.id;
+
+                            return (
+                              <div
+                                id={`private-message-${message.id}`}
+                                key={
+                                  message.id
+                                }
+                                className={`flex transition-all duration-300 ${
+                                  mine
+                                    ? "justify-end"
+                                    : "justify-start"
+                                }`}
+                              >
+                                <div
+                                  className={`max-w-[88%] sm:max-w-[70%] ${
+                                    mine
+                                      ? "items-end"
+                                      : "items-start"
+                                  }`}
+                                >
+                                  {message.is_pinned && (
+                                    <div
+                                      className={`mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold ${
+                                        mine
+                                          ? "justify-end text-indigo-500"
+                                          : "justify-start text-amber-500"
+                                      }`}
+                                    >
+                                      <span>
+                                        📌
+                                      </span>
+
+                                      <span>
+                                        {isArabic
+                                          ? "رسالة مثبتة"
+                                          : "Pinned message"}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  <div
+                                    className={`rounded-2xl px-3 py-3 shadow-sm ${
+                                      mine
+                                        ? "rounded-br-md bg-indigo-600 text-white"
+                                        : darkMode
+                                          ? "rounded-bl-md bg-slate-800 text-slate-100"
+                                          : "rounded-bl-md bg-white text-slate-900"
+                                    }`}
+                                  >
+                                    {message.reply_to_id && (
+                                      <div
+                                        className={`mb-2 rounded-xl border-s-4 px-3 py-2 text-xs ${
+                                          mine
+                                            ? "border-indigo-200/60 bg-indigo-500/20 text-indigo-50"
+                                            : darkMode
+                                              ? "border-slate-500 bg-slate-900/70 text-slate-300"
+                                              : "border-indigo-300 bg-slate-100 text-slate-600"
+                                        }`}
+                                      >
+                                        <div className="font-semibold">
+                                          {message.reply_to_sender_username ||
+                                            (isArabic
+                                              ? "رسالة"
+                                              : "Message")}
+                                        </div>
+
+                                        <div className="mt-1 truncate">
+                                          {message.reply_to_message ||
+                                            (isArabic
+                                              ? "مرفق"
+                                              : "Attachment")}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {message.deleted_at ? (
+                                      <p
+                                        className={`px-1 text-sm italic ${
+                                          mine
+                                            ? "text-indigo-100"
+                                            : darkMode
+                                              ? "text-slate-500"
+                                              : "text-slate-400"
+                                        }`}
+                                      >
+                                        {isArabic
+                                          ? "تم حذف هذه الرسالة"
+                                          : "This message was deleted"}
+                                      </p>
+                                    ) : (
+                                      <>
+                                        {renderAttachment(
+                                          message,
+                                          mine
+                                        )}
+
+                                        {message.message && (
+                                          <p className="whitespace-pre-wrap break-words px-1 text-sm leading-6">
+                                            {
+                                              message.message
+                                            }
+                                          </p>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+
+                                  <div
+                                    className={`mt-1 flex flex-wrap items-center gap-1 px-1 text-[10px] ${
+                                      mine
+                                        ? "justify-end"
+                                        : "justify-start"
+                                    } ${
+                                      darkMode
+                                        ? "text-slate-600"
+                                        : "text-slate-400"
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        startReply(
+                                          message
+                                        )
+                                      }
+                                      className="rounded px-1.5 py-0.5 hover:bg-slate-500/10"
+                                    >
+                                      {isArabic
+                                        ? "رد"
+                                        : "Reply"}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        togglePinMessage(
+                                          message
+                                        )
+                                      }
+                                      disabled={
+                                        messageActionId ===
+                                        message.id
+                                      }
+                                      className={`rounded px-1.5 py-0.5 transition hover:bg-slate-500/10 ${
+                                        message.is_pinned
+                                          ? "font-semibold text-amber-500"
+                                          : ""
+                                      }`}
+                                      title={
+                                        message.is_pinned
+                                          ? isArabic
+                                            ? "إلغاء تثبيت الرسالة"
+                                            : "Unpin message"
+                                          : isArabic
+                                            ? "تثبيت الرسالة"
+                                            : "Pin message"
+                                      }
+                                    >
+                                      📌{" "}
+                                      {message.is_pinned
+                                        ? isArabic
+                                          ? "إلغاء التثبيت"
+                                          : "Unpin"
+                                        : isArabic
+                                          ? "تثبيت"
+                                          : "Pin"}
+                                    </button>
+
+                                    {message.message &&
+                                      !message.deleted_at && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            copyMessage(
+                                              message
+                                            )
+                                          }
+                                          className="rounded px-1.5 py-0.5 hover:bg-slate-500/10"
+                                        >
+                                          {isArabic
+                                            ? "نسخ"
+                                            : "Copy"}
+                                        </button>
+                                      )}
+
+                                    {mine &&
+                                      !message.deleted_at && (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              startEdit(
+                                                message
+                                              )
+                                            }
+                                            className="rounded px-1.5 py-0.5 hover:bg-slate-500/10"
+                                          >
+                                            {isArabic
+                                              ? "تعديل"
+                                              : "Edit"}
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              deleteMessage(
+                                                message
+                                              )
+                                            }
+                                            className="rounded px-1.5 py-0.5 text-red-400 hover:bg-red-500/10"
+                                          >
+                                            {isArabic
+                                              ? "حذف"
+                                              : "Delete"}
+                                          </button>
+                                        </>
+                                      )}
+
+                                    <span>
+                                      {formatTime(
+                                        message.created_at
+                                      )}
+                                    </span>
+
+                                    {message.edited_at &&
+                                      !message.deleted_at && (
+                                        <span>
+                                          (
+                                          {isArabic
+                                            ? "معدلة"
+                                            : "edited"}
+                                          )
+                                        </span>
+                                      )}
+
+                                    {mine && (
+                                      <span
+                                        className={
+                                          message.is_read
+                                            ? "text-indigo-500"
+                                            : ""
+                                        }
+                                      >
+                                        ✓✓
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
+                        )}
+
+                        <div
+                          ref={
+                            messagesEndRef
+                          }
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    className={`border-t p-3 sm:p-4 ${
+                      darkMode
+                        ? "border-slate-800 bg-slate-900"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    {(replyingTo ||
+                      editingMessage) && (
+                      <div
+                        className={`mx-auto mb-3 flex max-w-4xl items-center gap-3 rounded-2xl border px-3 py-2 ${
+                          darkMode
+                            ? "border-indigo-500/30 bg-slate-950"
+                            : "border-indigo-200 bg-indigo-50"
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1 border-s-4 border-indigo-500 ps-3">
+                          <p className="text-xs font-semibold text-indigo-500">
+                            {editingMessage
+                              ? isArabic
+                                ? "تعديل الرسالة"
+                                : "Edit message"
+                              : isArabic
+                                ? "الرد على الرسالة"
+                                : "Replying to message"}
+                          </p>
+
+                          <p className="truncate text-xs opacity-70">
+                            {editingMessage?.message ||
+                              replyingTo?.message ||
+                              (isArabic
+                                ? "مرفق"
+                                : "Attachment")}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={
+                            cancelMessageAction
+                          }
+                          className="h-8 w-8 rounded-lg hover:bg-slate-500/10"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+
+                    {selectedFile && (
+                      <div
+                        className={`mx-auto mb-3 max-w-4xl rounded-2xl border p-3 ${
+                          darkMode
+                            ? "border-slate-700 bg-slate-950"
+                            : "border-slate-200 bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {filePreview && selectedFile.type.startsWith("image/") ? (
+                            <img src={filePreview} alt={selectedFile.name} className="h-16 w-16 rounded-xl object-cover" />
+                          ) : filePreview && selectedFile.type.startsWith("audio/") ? (
+                            <div className="min-w-0 flex-1">
+                              <audio controls src={filePreview} className="w-full max-w-xs" />
+                            </div>
+                          ) : (
+                            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-2xl text-white">
+                              {getFileIcon(selectedFile.type)}
+                            </div>
+                          )}
+
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold">
+                              {
+                                selectedFile.name
+                              }
+                            </p>
+
+                            <p
+                              className={`mt-1 text-xs ${
+                                darkMode
+                                  ? "text-slate-500"
+                                  : "text-slate-400"
+                              }`}
+                            >
+                              {formatFileSize(
+                                selectedFile.size
+                              )}
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={
+                              removeSelectedFile
+                            }
+                            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                              darkMode
+                                ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                                : "bg-white text-slate-500 hover:bg-slate-200"
+                            }`}
+                            title={
+                              isArabic
+                                ? "إزالة الملف"
+                                : "Remove file"
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mx-auto flex max-w-4xl items-end gap-2 sm:gap-3">
+                      <input
+                        ref={
+                          fileInputRef
+                        }
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.gif,.webp,.svg,.pdf,.txt,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.webm,.mp3,.wav,.ogg,.m4a,.aac,.mp4"
+                        onChange={
+                          handleFileChange
+                        }
+                        className="hidden"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          fileInputRef.current?.click()
+                        }
+                        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl transition ${
+                          darkMode
+                            ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                        title={
+                          isArabic
+                            ? "إرفاق ملف"
+                            : "Attach file"
+                        }
+                      >
+                        📎
+                      </button>
+
+                                            <button
+                        type="button"
+                        onClick={isRecordingAudio ? stopAudioRecording : startAudioRecording}
+                        disabled={!isRecordingAudio && (Boolean(selectedFile) || sending)}
+                        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl transition ${
+                          isRecordingAudio
+                            ? "bg-red-600 text-white hover:bg-red-700"
+                            : darkMode
+                              ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                        title={isRecordingAudio
+                          ? (isArabic ? "إيقاف التسجيل" : "Stop recording")
+                          : (isArabic ? "تسجيل صوتي" : "Record voice message")}
+                        aria-label={isRecordingAudio ? "Stop recording" : "Record voice message"}
+                      >
+                        {isRecordingAudio ? "⏹️" : "🎙️"}
+                      </button>
+                      <div
+                        ref={
+                          emojiPickerRef
+                        }
+                        className="relative shrink-0"
+                      >
+                        {showEmojiPicker && (
+                          <div className="absolute bottom-full left-0 z-50 mb-2">
+                            <EmojiPicker
+                              onEmojiClick={
+                                handleEmojiClick
+                              }
+                              theme={
+                                darkMode
+                                  ? Theme.DARK
+                                  : Theme.LIGHT
+                              }
+                              width={350}
+                              height={400}
+                              searchDisabled={
+                                false
+                              }
+                              previewConfig={{
+                                showPreview:
+                                  false,
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowEmojiPicker(
+                              (current) =>
+                                !current
+                            )
+                          }
+                          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl transition ${
+                            showEmojiPicker
+                              ? "bg-indigo-600 text-white"
+                              : darkMode
+                                ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                          title={
+                            isArabic
+                              ? "إضافة إيموجي"
+                              : "Add emoji"
+                          }
+                        >
+                          😊
+                        </button>
+                      </div>
+
+                      <textarea
+                        ref={
+                          textareaRef
+                        }
+                        value={
+                          messageText
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          setMessageText(
+                            event.target
+                              .value
+                          )
+                        }
+                        onKeyDown={
+                          handleMessageKeyDown
+                        }
+                        rows={1}
+                        maxLength={5000}
+                        placeholder={
+                          isArabic
+                            ? "اكتب رسالة..."
+                            : "Write a message..."
+                        }
+                        className={`max-h-36 min-h-[48px] flex-1 resize-none rounded-2xl border px-4 py-3 text-sm outline-none transition focus:ring-2 focus:ring-indigo-500 ${
+                          darkMode
+                            ? "border-slate-700 bg-slate-950 text-white placeholder:text-slate-500"
+                            : "border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400"
+                        }`}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={
+                          editingMessage
+                            ? editMessage
+                            : sendMessage
+                        }
+                        disabled={
+                          sending ||
+                          messageActionId !==
+                            null ||
+                          (!messageText.trim() &&
+                            !selectedFile)
+                        }
+                        className="flex h-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 px-4 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5"
+                      >
+                        {sending ||
+                        messageActionId !==
+                          null
+                          ? "..."
+                          : editingMessage
+                            ? isArabic
+                              ? "حفظ"
+                              : "Save"
+                            : isArabic
+                              ? "إرسال"
+                              : "Send"}
+                      </button>
+                    </div>
+
+                    <p
+                      className={`mx-auto mt-2 max-w-4xl text-[10px] ${
+                        darkMode
+                          ? "text-slate-600"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {isArabic
+                        ? "Enter للإرسال • Shift + Enter لسطر جديد • الحد الأقصى للملف 10 ميجابايت"
+                        : "Enter to send • Shift + Enter for a new line • Max file size 10 MB"}
+                    </p>
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}

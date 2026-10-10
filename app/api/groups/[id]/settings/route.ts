@@ -1,73 +1,79 @@
 import { NextRequest, NextResponse } from "next/server";
 import Database from "better-sqlite3";
+import crypto from "crypto";
 
 const db = new Database("studyhub.db");
 
-const columns = db
-  .prepare(`PRAGMA table_info(study_groups)`)
-  .all() as Array<{
-    name: string;
-  }>;
+function ensureColumn(
+  table: string,
+  column: string,
+  definition: string
+) {
+  const columns = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as Array<{ name: string }>;
 
-const hasChatEnabled = columns.some(
-  (column) => column.name === "chat_enabled"
-);
-
-if (!hasChatEnabled) {
-  db.exec(`
-    ALTER TABLE study_groups
-    ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 1
-  `);
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
-const hasGroupImage = columns.some(
-  (column) => column.name === "group_image"
+ensureColumn(
+  "study_groups",
+  "chat_enabled",
+  "INTEGER NOT NULL DEFAULT 1"
 );
 
-if (!hasGroupImage) {
-  db.exec(`
-    ALTER TABLE study_groups
-    ADD COLUMN group_image TEXT DEFAULT ''
-  `);
-}
+ensureColumn(
+  "study_groups",
+  "group_image",
+  "TEXT DEFAULT ''"
+);
+
+ensureColumn(
+  "study_groups",
+  "visibility",
+  "TEXT NOT NULL DEFAULT 'public'"
+);
+
+ensureColumn(
+  "study_groups",
+  "invite_code",
+  "TEXT DEFAULT ''"
+);
 
 function getCurrentUser(request: NextRequest) {
-  const token =
-    request.cookies.get("studyhub_session")?.value;
+  const token = request.cookies.get("studyhub_session")?.value;
 
-  if (!token) {
-    return null;
-  }
+  if (!token) return null;
 
-  return (
-    db
-      .prepare(`
-        SELECT
-          users.id,
-          users.username,
-          users.email
-        FROM sessions
-        JOIN users
-          ON users.id = sessions.user_id
-        WHERE sessions.token = ?
-      `)
-      .get(token) as
-      | {
-          id: number;
-          username: string;
-          email: string;
-        }
-      | undefined
-  );
+  return db
+    .prepare(`
+      SELECT users.id, users.username, users.email
+      FROM sessions
+      JOIN users ON users.id = sessions.user_id
+      WHERE sessions.token = ?
+    `)
+    .get(token) as
+    | {
+        id: number;
+        username: string;
+        email: string;
+      }
+    | undefined;
+}
+
+function generateInviteCode() {
+  return crypto
+    .randomBytes(6)
+    .toString("base64url")
+    .slice(0, 8)
+    .toUpperCase();
 }
 
 export async function PATCH(
   request: NextRequest,
-  context: {
-    params: Promise<{
-      id: string;
-    }>;
-  }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     const user = getCurrentUser(request);
@@ -85,10 +91,7 @@ export async function PATCH(
     const { id } = await context.params;
     const groupId = Number(id);
 
-    if (
-      !Number.isInteger(groupId) ||
-      groupId <= 0
-    ) {
+    if (!Number.isInteger(groupId) || groupId <= 0) {
       return NextResponse.json(
         {
           success: false,
@@ -101,17 +104,19 @@ export async function PATCH(
     const group = db
       .prepare(`
         SELECT
+          id,
           owner_id,
-          chat_enabled,
-          COALESCE(group_image, '') AS group_image
+          COALESCE(visibility, 'public') AS visibility,
+          COALESCE(invite_code, '') AS invite_code
         FROM study_groups
         WHERE id = ?
       `)
       .get(groupId) as
       | {
+          id: number;
           owner_id: number;
-          chat_enabled: number;
-          group_image: string;
+          visibility: string;
+          invite_code: string;
         }
       | undefined;
 
@@ -138,111 +143,78 @@ export async function PATCH(
 
     const body = await request.json();
 
-    const hasChatSetting =
-      typeof body.chatEnabled !== "undefined";
+    const updates: string[] = [];
+    const values: unknown[] = [];
 
-    const hasImageSetting =
-      typeof body.groupImage !== "undefined";
-
-    if (!hasChatSetting && !hasImageSetting) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "No valid setting was provided.",
-        },
-        { status: 400 }
-      );
+    if (typeof body.chatEnabled === "boolean") {
+      updates.push("chat_enabled = ?");
+      values.push(body.chatEnabled ? 1 : 0);
     }
 
-    // Update chat status if provided.
-    if (hasChatSetting) {
-      if (
-        typeof body.chatEnabled !== "boolean"
-      ) {
+    if (
+      typeof body.groupImage === "string" &&
+      body.groupImage.startsWith("data:image/")
+    ) {
+      if (body.groupImage.length > 3000000) {
         return NextResponse.json(
           {
             success: false,
-            message:
-              "chatEnabled must be a boolean.",
+            message: "Group image cannot be larger than 2MB.",
           },
           { status: 400 }
         );
       }
+
+      updates.push("group_image = ?");
+      values.push(body.groupImage);
+    }
+
+    let visibility = group.visibility;
+    let inviteCode = group.invite_code;
+
+    if (
+      body.visibility === "public" ||
+      body.visibility === "private"
+    ) {
+      visibility = body.visibility;
+
+      if (visibility === "private" && !inviteCode) {
+        inviteCode = generateInviteCode();
+      }
+
+      if (visibility === "public") {
+        inviteCode = "";
+      }
+
+      updates.push("visibility = ?");
+      values.push(visibility);
+
+      updates.push("invite_code = ?");
+      values.push(inviteCode);
+    }
+
+    if (updates.length > 0) {
+      values.push(groupId);
 
       db.prepare(`
         UPDATE study_groups
-        SET chat_enabled = ?
+        SET ${updates.join(", ")}
         WHERE id = ?
-      `).run(
-        body.chatEnabled ? 1 : 0,
-        groupId
-      );
+      `).run(...values);
     }
-
-    // Update group image if provided.
-    if (hasImageSetting) {
-      if (
-        body.groupImage !== "" &&
-        (
-          typeof body.groupImage !== "string" ||
-          !body.groupImage.startsWith("data:image/")
-        )
-      ) {
-        return NextResponse.json(
-          {
-            success: false,
-            message:
-              "Invalid group image.",
-          },
-          { status: 400 }
-        );
-      }
-
-      // Prevent extremely large images.
-      if (
-        typeof body.groupImage === "string" &&
-        body.groupImage.length > 3000000
-      ) {
-        return NextResponse.json(
-          {
-            success: false,
-            message:
-              "Group image is too large. Maximum size is 2MB.",
-          },
-          { status: 400 }
-        );
-      }
-
-      db.prepare(`
-        UPDATE study_groups
-        SET group_image = ?
-        WHERE id = ?
-      `).run(
-        body.groupImage,
-        groupId
-      );
-    }
-
-    const updatedGroup = db
-      .prepare(`
-        SELECT
-          chat_enabled,
-          COALESCE(group_image, '') AS group_image
-        FROM study_groups
-        WHERE id = ?
-      `)
-      .get(groupId) as {
-        chat_enabled: number;
-        group_image: string;
-      };
 
     return NextResponse.json({
       success: true,
       chatEnabled:
-        Boolean(updatedGroup.chat_enabled),
-      groupImage:
-        updatedGroup.group_image,
+        typeof body.chatEnabled === "boolean"
+          ? body.chatEnabled
+          : undefined,
+      visibility,
+      inviteCode,
+      inviteLink:
+        visibility === "private"
+          ? `/groups/${groupId}?invite=${inviteCode}`
+          : "",
     });
   } catch (error) {
     console.error(
@@ -253,8 +225,7 @@ export async function PATCH(
     return NextResponse.json(
       {
         success: false,
-        message:
-          "Failed to update group settings.",
+        message: "Failed to update group settings.",
       },
       { status: 500 }
     );

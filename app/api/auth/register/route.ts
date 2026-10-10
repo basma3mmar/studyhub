@@ -14,9 +14,26 @@ db.exec(`
     username TEXT NOT NULL UNIQUE,
     email TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    profile_image TEXT DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'User'
   )
 `);
+
+const userColumns = db
+  .prepare("PRAGMA table_info(users)")
+  .all() as Array<{ name: string }>;
+
+const hasRoleColumn = userColumns.some(
+  (column) => column.name === "role"
+);
+
+if (!hasRoleColumn) {
+  db.exec(`
+    ALTER TABLE users
+    ADD COLUMN role TEXT NOT NULL DEFAULT 'User'
+  `);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -134,9 +151,10 @@ export async function POST(request: Request) {
           INSERT INTO users (
             username,
             email,
-            password
+            password,
+            role
           )
-          VALUES (?, ?, ?)
+          VALUES (?, ?, ?, 'User')
           `
         )
         .run(username, email, hashedPassword);
@@ -158,7 +176,6 @@ export async function POST(request: Request) {
       throw error;
     }
 
-    // Create login session automatically
     const token = crypto.randomBytes(32).toString("hex");
 
     db.prepare(
@@ -171,7 +188,6 @@ export async function POST(request: Request) {
       `
     ).run(token, userId);
 
-    // Return response and set authentication cookie
     const response = NextResponse.json(
       {
         message: "Account created successfully.",
@@ -179,6 +195,7 @@ export async function POST(request: Request) {
           id: userId,
           username,
           email,
+          role: "User",
         },
       },
       { status: 201 }

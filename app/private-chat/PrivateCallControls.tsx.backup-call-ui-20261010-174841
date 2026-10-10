@@ -1,0 +1,641 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+type User = { id: number; username: string; email: string };
+
+type Props = {
+  currentUser: User | null;
+  selectedUser: User | null;
+  darkMode: boolean;
+  isArabic: boolean;
+};
+
+type IncomingCall = {
+  id: number;
+  callerId: number;
+  receiverId: number;
+  callType: "audio" | "video";
+  status: string;
+  callerUsername: string;
+};
+
+type CallData = {
+  id: number;
+  caller_id: number;
+  receiver_id: number;
+  call_type: "audio" | "video";
+  status: string;
+  offer: string | null;
+  answer: string | null;
+};
+
+const RTC_CONFIG: RTCConfiguration = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+};
+
+export default function PrivateCallControls({
+  currentUser,
+  selectedUser,
+  darkMode,
+  isArabic,
+}: Props) {
+  const [incoming, setIncoming] = useState<IncomingCall | null>(null);
+  const [callId, setCallId] = useState<number | null>(null);
+  const [callType, setCallType] = useState<"audio" | "video">("audio");
+  const [callStatus, setCallStatus] = useState("");
+  const [muted, setMuted] = useState(false);
+  const [cameraOff, setCameraOff] = useState(false);
+  const [error, setError] = useState("");
+
+  const peerRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const callIdRef = useRef<number | null>(null);
+  const lastSignalIdRef = useRef(0);
+  const remoteReadyRef = useRef(false);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const pendingLocalCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const answerProcessedRef = useRef(false);
+  const incomingIdRef = useRef<number | null>(null);
+  const busyRef = useRef(false);
+
+  const request = useCallback(async (url: string, init?: RequestInit) => {
+    const response = await fetch(url, {
+      ...init,
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers || {}),
+      },
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.message || "Request failed");
+    }
+
+    return data;
+  }, []);
+
+  const post = useCallback(
+    (body: Record<string, unknown>) =>
+      request("/api/private-chat/calls", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    [request]
+  );
+
+  const cleanup = useCallback(() => {
+    if (peerRef.current) {
+      peerRef.current.ontrack = null;
+      peerRef.current.onicecandidate = null;
+      peerRef.current.onconnectionstatechange = null;
+      peerRef.current.close();
+      peerRef.current = null;
+    }
+
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
+
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+
+    callIdRef.current = null;
+    lastSignalIdRef.current = 0;
+    remoteReadyRef.current = false;
+    pendingCandidatesRef.current = [];
+    pendingLocalCandidatesRef.current = [];
+    answerProcessedRef.current = false;
+    busyRef.current = false;
+
+    setCallId(null);
+    setCallStatus("");
+    setIncoming(null);
+    setMuted(false);
+    setCameraOff(false);
+  }, []);
+
+  const sendCandidate = useCallback(
+    async (candidate: RTCIceCandidateInit) => {
+      const id = callIdRef.current;
+      if (!id) {
+        pendingLocalCandidatesRef.current.push(candidate);
+        return;
+      }
+
+      try {
+        const data = await request(
+          `/api/private-chat/calls?callId=${id}&afterId=${lastSignalIdRef.current}`
+        );
+
+        if (data.call?.status !== "accepted") {
+          pendingLocalCandidatesRef.current.push(candidate);
+          return;
+        }
+
+        await post({
+          action: "signal",
+          callId: id,
+          signalType: "candidate",
+          payload: candidate,
+        });
+      } catch {
+        pendingLocalCandidatesRef.current.push(candidate);
+      }
+    },
+    [post, request]
+  );
+
+  const flushCandidates = useCallback(async () => {
+    const id = callIdRef.current;
+    if (!id) return;
+
+    const queue = [...pendingLocalCandidatesRef.current];
+    pendingLocalCandidatesRef.current = [];
+
+    for (const candidate of queue) {
+      try {
+        await post({
+          action: "signal",
+          callId: id,
+          signalType: "candidate",
+          payload: candidate,
+        });
+      } catch {
+        pendingLocalCandidatesRef.current.push(candidate);
+      }
+    }
+  }, [post]);
+
+  const preparePeer = useCallback(
+    async (type: "audio" | "video") => {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video",
+      });
+
+      localStreamRef.current = stream;
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+
+      const peer = new RTCPeerConnection(RTC_CONFIG);
+      peerRef.current = peer;
+
+      stream.getTracks().forEach((track) => peer.addTrack(track, stream));
+
+      peer.ontrack = (event) => {
+        let remote = remoteStreamRef.current;
+
+        if (!remote) {
+          remote = new MediaStream();
+          remoteStreamRef.current = remote;
+        }
+
+        if (!remote.getTracks().some((track) => track.id === event.track.id)) {
+          remote.addTrack(event.track);
+        }
+
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remote;
+          void remoteVideoRef.current.play().catch(() => {});
+        }
+      };
+
+      peer.onicecandidate = (event) => {
+        if (event.candidate) {
+          void sendCandidate(event.candidate.toJSON());
+        }
+      };
+
+      peer.onconnectionstatechange = () => {
+        if (peer.connectionState === "connected") {
+          setCallStatus(isArabic ? "متصل" : "Connected");
+        } else if (peer.connectionState === "failed") {
+          setError(
+            isArabic
+              ? "فشل الاتصال. قد تحتاج الشبكة إلى إعداد TURN."
+              : "Connection failed. This network may require a TURN server."
+          );
+        }
+      };
+
+      return peer;
+    },
+    [isArabic, sendCandidate]
+  );
+
+  const startCall = useCallback(
+    async (type: "audio" | "video") => {
+      if (!currentUser || !selectedUser || busyRef.current) return;
+
+      busyRef.current = true;
+      setError("");
+
+      try {
+        setCallType(type);
+        setCallStatus(isArabic ? "جارٍ الاتصال..." : "Calling...");
+
+        const peer = await preparePeer(type);
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+
+        const result = await post({
+          action: "start",
+          receiverId: selectedUser.id,
+          callType: type,
+          offer: peer.localDescription,
+        });
+
+        callIdRef.current = result.callId;
+        setCallId(result.callId);
+        await flushCandidates();
+      } catch (e) {
+        cleanup();
+        setError(
+          e instanceof Error
+            ? e.message
+            : isArabic
+              ? "تعذر بدء المكالمة."
+              : "Could not start the call."
+        );
+      } finally {
+        busyRef.current = false;
+      }
+    },
+    [
+      cleanup,
+      currentUser,
+      flushCandidates,
+      isArabic,
+      post,
+      preparePeer,
+      selectedUser,
+    ]
+  );
+
+  const acceptCall = useCallback(async () => {
+    if (!incoming || busyRef.current) return;
+
+    busyRef.current = true;
+    setError("");
+
+    try {
+      const id = incoming.id;
+      const result = await request(
+        `/api/private-chat/calls?callId=${id}&afterId=0`
+      );
+
+      const call = result.call as CallData;
+      if (!call.offer) throw new Error("Call offer is missing.");
+
+      const peer = await preparePeer(call.call_type);
+      callIdRef.current = id;
+      setCallId(id);
+      setCallType(call.call_type);
+      setCallStatus(isArabic ? "جارٍ توصيل المكالمة..." : "Connecting...");
+
+      await peer.setRemoteDescription(JSON.parse(call.offer));
+      remoteReadyRef.current = true;
+
+      for (const candidate of pendingCandidatesRef.current) {
+        await peer.addIceCandidate(candidate).catch(() => {});
+      }
+      pendingCandidatesRef.current = [];
+
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+
+      await post({
+        action: "accept",
+        callId: id,
+        answer: peer.localDescription,
+      });
+
+      setIncoming(null);
+      await flushCandidates();
+    } catch (e) {
+      cleanup();
+      setError(
+        e instanceof Error
+          ? e.message
+          : isArabic
+            ? "تعذر قبول المكالمة."
+            : "Could not accept the call."
+      );
+    } finally {
+      busyRef.current = false;
+    }
+  }, [cleanup, flushCandidates, incoming, isArabic, post, preparePeer, request]);
+
+  const rejectCall = useCallback(async () => {
+    if (!incoming) return;
+
+    try {
+      await post({ action: "reject", callId: incoming.id });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not reject the call.");
+    } finally {
+      setIncoming(null);
+    }
+  }, [incoming, post]);
+
+  const endCall = useCallback(async () => {
+    const id = callIdRef.current;
+
+    try {
+      if (id) await post({ action: "end", callId: id });
+    } catch {
+      // Clean up local media even if the network request fails.
+    } finally {
+      cleanup();
+    }
+  }, [cleanup, post]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let stopped = false;
+
+    const poll = async () => {
+      if (stopped) return;
+
+      try {
+        const data = await request("/api/private-chat/calls");
+
+        if (stopped) return;
+
+        if (!callIdRef.current && data.incoming?.length) {
+          const next = data.incoming[0] as IncomingCall;
+
+          if (incomingIdRef.current !== next.id) {
+            incomingIdRef.current = next.id;
+            setIncoming(next);
+          }
+        }
+
+        const active = data.active?.find(
+          (item: { id: number }) => item.id === callIdRef.current
+        );
+
+        if (callIdRef.current && !active) {
+          cleanup();
+          return;
+        }
+
+        const id = callIdRef.current;
+        if (!id) return;
+
+        const details = await request(
+          `/api/private-chat/calls?callId=${id}&afterId=${lastSignalIdRef.current}`
+        );
+
+        if (stopped) return;
+
+        const call = details.call as CallData;
+
+        if (
+          ["ended", "rejected", "missed"].includes(call.status)
+        ) {
+          cleanup();
+          return;
+        }
+
+        if (call.status === "accepted") {
+          setCallStatus(isArabic ? "متصل" : "Connected");
+          await flushCandidates();
+
+          for (const signal of details.signals || []) {
+            lastSignalIdRef.current = Math.max(
+              lastSignalIdRef.current,
+              signal.id
+            );
+
+            const payload =
+              typeof signal.payload === "string"
+                ? JSON.parse(signal.payload)
+                : signal.payload;
+
+            if (
+              signal.type === "answer" &&
+              call.caller_id === currentUser.id &&
+              !answerProcessedRef.current &&
+              peerRef.current
+            ) {
+              answerProcessedRef.current = true;
+              await peerRef.current.setRemoteDescription(payload);
+              remoteReadyRef.current = true;
+
+              for (const candidate of pendingCandidatesRef.current) {
+                await peerRef.current.addIceCandidate(candidate).catch(() => {});
+              }
+              pendingCandidatesRef.current = [];
+            } else if (signal.type === "candidate" && peerRef.current) {
+              if (remoteReadyRef.current) {
+                await peerRef.current.addIceCandidate(payload).catch(() => {});
+              } else {
+                pendingCandidatesRef.current.push(payload);
+              }
+            }
+          }
+        }
+      } catch {
+        // Poll again on the next interval.
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1500);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [cleanup, currentUser, flushCandidates, isArabic, request]);
+
+  useEffect(() => {
+    return () => {
+      peerRef.current?.close();
+      localStreamRef.current?.getTracks().forEach((track) => track.stop());
+      remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  const toggleMute = () => {
+    const tracks = localStreamRef.current?.getAudioTracks() || [];
+    const next = !muted;
+    tracks.forEach((track) => (track.enabled = !next));
+    setMuted(next);
+  };
+
+  const toggleCamera = () => {
+    const tracks = localStreamRef.current?.getVideoTracks() || [];
+    const next = !cameraOff;
+    tracks.forEach((track) => (track.enabled = !next));
+    setCameraOff(next);
+  };
+
+  const panel =
+    "rounded-xl border p-3 " +
+    (darkMode
+      ? "border-slate-700 bg-slate-900 text-white"
+      : "border-slate-200 bg-white text-slate-900");
+
+  return (
+    <>
+      {selectedUser && (
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            title={isArabic ? "مكالمة صوتية" : "Audio call"}
+            onClick={() => void startCall("audio")}
+            className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            ☎
+          </button>
+          <button
+            type="button"
+            title={isArabic ? "مكالمة فيديو" : "Video call"}
+            onClick={() => void startCall("video")}
+            className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
+          >
+            ▣
+          </button>
+        </div>
+      )}
+
+      {incoming && !callId && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4">
+          <div className={panel + " w-full max-w-sm space-y-4 shadow-2xl"}>
+            <h3 className="text-lg font-bold">
+              {isArabic ? "مكالمة واردة" : "Incoming call"}
+            </h3>
+            <p>
+              {incoming.callerUsername} ·{" "}
+              {incoming.callType === "video"
+                ? isArabic ? "فيديو" : "Video"
+                : isArabic ? "صوت" : "Audio"}
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => void acceptCall()}
+                className="flex-1 rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white"
+              >
+                {isArabic ? "قبول" : "Accept"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void rejectCall()}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 font-semibold text-white"
+              >
+                {isArabic ? "رفض" : "Decline"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {callId && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4">
+          <div className={panel + " w-full max-w-2xl space-y-4 shadow-2xl"}>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-bold">
+                {callType === "video"
+                  ? isArabic ? "مكالمة فيديو" : "Video call"
+                  : isArabic ? "مكالمة صوتية" : "Audio call"}
+              </h3>
+              <span className="text-sm text-emerald-500">{callStatus}</span>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="relative min-h-40 overflow-hidden rounded-xl bg-slate-950">
+                <video
+                  ref={remoteVideoRef}
+                  autoPlay
+                  playsInline
+                  className="h-56 w-full object-cover"
+                />
+                {callType === "audio" && (
+                  <p className="absolute inset-0 flex items-center justify-center text-white">
+                    {isArabic ? "الصوت البعيد" : "Remote audio"}
+                  </p>
+                )}
+              </div>
+              <div className="relative min-h-40 overflow-hidden rounded-xl bg-slate-950">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="h-56 w-full object-cover"
+                />
+                {callType === "audio" && (
+                  <p className="absolute inset-0 flex items-center justify-center text-white">
+                    {isArabic ? "أنت" : "You"}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {error && <p className="text-sm text-red-500">{error}</p>}
+
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={toggleMute}
+                className="rounded-lg bg-slate-700 px-4 py-2 font-semibold text-white"
+              >
+                {muted
+                  ? isArabic ? "تشغيل الميكروفون" : "Unmute"
+                  : isArabic ? "كتم الميكروفون" : "Mute"}
+              </button>
+
+              {callType === "video" && (
+                <button
+                  type="button"
+                  onClick={toggleCamera}
+                  className="rounded-lg bg-slate-700 px-4 py-2 font-semibold text-white"
+                >
+                  {cameraOff
+                    ? isArabic ? "تشغيل الكاميرا" : "Camera on"
+                    : isArabic ? "إيقاف الكاميرا" : "Camera off"}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void endCall()}
+                className="rounded-lg bg-red-600 px-5 py-2 font-semibold text-white hover:bg-red-700"
+              >
+                {isArabic ? "إنهاء المكالمة" : "End call"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {error && !callId && !incoming && (
+        <div
+          role="alert"
+          className="fixed bottom-4 left-4 right-4 z-[110] mx-auto max-w-lg rounded-lg bg-red-700 p-3 text-sm text-white shadow-lg"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span>{error}</span>
+            <button type="button" onClick={() => setError("")}>
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

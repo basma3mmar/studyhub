@@ -1,8 +1,170 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import {
+  languages,
+  useLanguage,
+} from "./language-provider";
 
 export default function Home() {
+  const { language, setLanguage, t } = useLanguage();
+  const [languageOpen, setLanguageOpen] = useState(false);
+
+  const currentLanguage =
+    languages.find((item) => item.code === language) ||
+    languages.find((item) => item.code === "en") ||
+    languages[0];
+
+  const navTranslations: Record<
+    string,
+    {
+      features: string;
+      howItWorks: string;
+      about: string;
+    }
+  > = {
+    en: {
+      features: "Features",
+      howItWorks: "How it works",
+      about: "About",
+    },
+    ar: {
+      features: "المميزات",
+      howItWorks: "كيف يعمل",
+      about: "عن المنصة",
+    },
+    es: {
+      features: "Funciones",
+      howItWorks: "Cómo funciona",
+      about: "Acerca de",
+    },
+    fr: {
+      features: "Fonctionnalités",
+      howItWorks: "Comment ça marche",
+      about: "À propos",
+    },
+    pt: {
+      features: "Recursos",
+      howItWorks: "Como funciona",
+      about: "Sobre",
+    },
+    it: {
+      features: "Funzionalità",
+      howItWorks: "Come funziona",
+      about: "Chi siamo",
+    },
+    de: {
+      features: "Funktionen",
+      howItWorks: "So funktioniert es",
+      about: "Über uns",
+    },
+    zh: {
+      features: "功能",
+      howItWorks: "工作方式",
+      about: "关于我们",
+    },
+    ja: {
+      features: "機能",
+      howItWorks: "使い方",
+      about: "概要",
+    },
+    ko: {
+      features: "기능",
+      howItWorks: "사용 방법",
+      about: "소개",
+    },
+    ru: {
+      features: "Возможности",
+      howItWorks: "Как это работает",
+      about: "О нас",
+    },
+    tr: {
+      features: "Özellikler",
+      howItWorks: "Nasıl çalışır",
+      about: "Hakkımızda",
+    },
+    hi: {
+      features: "विशेषताएँ",
+      howItWorks: "यह कैसे काम करता है",
+      about: "हमारे बारे में",
+    },
+  };
+
+  const navText =
+    navTranslations[language] || navTranslations.en;
+
+  const previewTasks: Record<string, string[]> = {
+    en: [
+      "Study Mathematics - Chapter 4",
+      "Finish Programming Assignment",
+      "Review Physics Notes",
+    ],
+    ar: [
+      "دراسة الرياضيات - الفصل الرابع",
+      "إنهاء واجب البرمجة",
+      "مراجعة ملاحظات الفيزياء",
+    ],
+    es: [
+      "Estudiar Matemáticas - Capítulo 4",
+      "Terminar la tarea de programación",
+      "Revisar apuntes de Física",
+    ],
+    fr: [
+      "Étudier les mathématiques - Chapitre 4",
+      "Terminer le devoir de programmation",
+      "Réviser les notes de physique",
+    ],
+    pt: [
+      "Estudar Matemática - Capítulo 4",
+      "Concluir a atividade de programação",
+      "Revisar as anotações de Física",
+    ],
+    it: [
+      "Studiare matematica - Capitolo 4",
+      "Terminare l'esercizio di programmazione",
+      "Ripassare gli appunti di fisica",
+    ],
+    de: [
+      "Mathematik lernen - Kapitel 4",
+      "Programmieraufgabe abschließen",
+      "Physiknotizen wiederholen",
+    ],
+    zh: [
+      "学习数学 - 第4章",
+      "完成编程作业",
+      "复习物理笔记",
+    ],
+    ja: [
+      "数学を勉強する - 第4章",
+      "プログラミング課題を終える",
+      "物理のノートを復習する",
+    ],
+    ko: [
+      "수학 공부 - 4장",
+      "프로그래밍 과제 완료",
+      "물리 노트 복습",
+    ],
+    ru: [
+      "Изучить математику — глава 4",
+      "Закончить задание по программированию",
+      "Повторить конспект по физике",
+    ],
+    tr: [
+      "Matematik Çalış - Bölüm 4",
+      "Programlama ödevini tamamla",
+      "Fizik notlarını gözden geçir",
+    ],
+    hi: [
+      "गणित पढ़ें - अध्याय 4",
+      "प्रोग्रामिंग असाइनमेंट पूरा करें",
+      "भौतिकी के नोट्स दोहराएँ",
+    ],
+  };
+
+  const tasks =
+    previewTasks[language] || previewTasks.en;
+
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       {/* Navbar */}
@@ -20,31 +182,110 @@ export default function Home() {
               href="#features"
               className="transition hover:text-indigo-600"
             >
-              Features
+              {navText.features}
             </a>
 
             <a
               href="#how-it-works"
               className="transition hover:text-indigo-600"
             >
-              How it works
+              {navText.howItWorks}
             </a>
 
             <a
               href="#about"
               className="transition hover:text-indigo-600"
             >
-              About
+              {navText.about}
             </a>
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Language Selector */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  setLanguageOpen((current) => !current)
+                }
+                className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600"
+                aria-label={t.common.selectLanguage}
+                aria-expanded={languageOpen}
+              >
+                <span className="text-base">🌐</span>
+
+                <span className="hidden sm:inline">
+                  {currentLanguage.nativeName}
+                </span>
+
+                <span className="text-xs">▾</span>
+              </button>
+
+              {languageOpen && (
+                <>
+                  <button
+                    type="button"
+                    aria-label={t.common.selectLanguage}
+                    className="fixed inset-0 z-40 cursor-default"
+                    onClick={() =>
+                      setLanguageOpen(false)
+                    }
+                  />
+
+                  <div className="absolute right-0 top-full z-50 mt-2 max-h-96 w-60 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <div className="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      <span className="text-base">🌐</span>
+
+                      <span>
+                        {t.common.selectLanguage}
+                      </span>
+                    </div>
+
+                    {languages.map((item) => {
+                      const selected =
+                        item.code === language;
+
+                      return (
+                        <button
+                          key={item.code}
+                          type="button"
+                          onClick={() => {
+                            setLanguage(item.code);
+                            setLanguageOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${
+                            selected
+                              ? "bg-indigo-50 font-semibold text-indigo-600"
+                              : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="text-lg">
+                            {item.flag}
+                          </span>
+
+                          <span className="flex-1">
+                            {item.nativeName}
+                          </span>
+
+                          {selected && (
+                            <span className="font-bold text-indigo-600">
+                              ✓
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
             {/* Log in */}
             <Link
               href="/login"
               className="hidden rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 sm:block"
             >
-              Log in
+              {t.common.login}
             </Link>
 
             {/* Get Started */}
@@ -52,13 +293,12 @@ export default function Home() {
               href="/register"
               className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
             >
-              Get Started
+              {t.common.getStarted}
             </Link>
           </div>
         </div>
       </nav>
 
-      {/* Space for fixed navbar */}
       <div className="h-[81px]" />
 
       {/* Hero */}
@@ -66,35 +306,34 @@ export default function Home() {
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-4xl text-center">
             <div className="mb-6 inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700">
-              Your smarter way to study
+              {t.landing.badge}
             </div>
 
             <h1 className="text-5xl font-bold leading-tight tracking-tight text-slate-900 md:text-6xl">
-              Organize your study.
+              {t.landing.title}
               <br />
-              <span className="text-indigo-600">Achieve more.</span>
+              <span className="text-indigo-600">
+                {t.landing.titleHighlight}
+              </span>
             </h1>
 
             <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-              StudyHub brings your tasks, notes, schedule, focus sessions,
-              materials, and study groups together in one simple workspace.
+              {t.landing.description}
             </p>
 
             <div className="mt-9 flex flex-col justify-center gap-4 sm:flex-row">
-              {/* Start Studying */}
               <Link
                 href="/register"
                 className="rounded-xl bg-indigo-600 px-7 py-3.5 font-semibold text-white shadow-lg shadow-indigo-200 transition hover:bg-indigo-700"
               >
-                Start Studying
+                {t.landing.startStudying}
               </Link>
 
-              {/* Explore Features */}
               <a
                 href="#features"
                 className="rounded-xl border border-slate-300 bg-white px-7 py-3.5 font-semibold text-slate-700 transition hover:bg-slate-50"
               >
-                Explore Features
+                {t.landing.exploreFeatures}
               </a>
             </div>
           </div>
@@ -111,32 +350,35 @@ export default function Home() {
               <div className="grid min-h-[360px] grid-cols-1 md:grid-cols-[210px_1fr]">
                 <aside className="hidden border-r border-slate-200 bg-slate-50 p-5 md:block">
                   <div className="mb-8 text-lg font-bold">
-                    Study<span className="text-indigo-600">Hub</span>
+                    Study
+                    <span className="text-indigo-600">
+                      Hub
+                    </span>
                   </div>
 
                   <div className="space-y-2 text-sm">
                     <div className="rounded-lg bg-indigo-100 px-3 py-2 font-semibold text-indigo-700">
-                      Dashboard
+                      {t.nav.dashboard}
                     </div>
 
                     <div className="px-3 py-2 text-slate-500">
-                      Planner
+                      {t.nav.planner}
                     </div>
 
                     <div className="px-3 py-2 text-slate-500">
-                      Tasks
+                      {t.nav.tasks}
                     </div>
 
                     <div className="px-3 py-2 text-slate-500">
-                      Notes
+                      {t.nav.notes}
                     </div>
 
                     <div className="px-3 py-2 text-slate-500">
-                      Pomodoro
+                      {t.nav.pomodoro}
                     </div>
 
                     <div className="px-3 py-2 text-slate-500">
-                      Study Groups
+                      {t.nav.groups}
                     </div>
                   </div>
                 </aside>
@@ -144,18 +386,18 @@ export default function Home() {
                 <div className="p-6">
                   <div className="mb-6">
                     <p className="text-sm text-slate-500">
-                      Good morning 👋
+                      {t.dashboard.goodMorning} 👋
                     </p>
 
                     <h2 className="mt-1 text-2xl font-bold">
-                      Ready to study?
+                      {t.dashboard.readyToStudy}
                     </h2>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="rounded-xl border border-slate-200 p-4">
                       <p className="text-sm text-slate-500">
-                        Tasks
+                        {t.dashboard.tasks}
                       </p>
 
                       <p className="mt-2 text-2xl font-bold">
@@ -165,7 +407,7 @@ export default function Home() {
 
                     <div className="rounded-xl border border-slate-200 p-4">
                       <p className="text-sm text-slate-500">
-                        Study time
+                        {t.dashboard.studyTime}
                       </p>
 
                       <p className="mt-2 text-2xl font-bold">
@@ -175,7 +417,7 @@ export default function Home() {
 
                     <div className="rounded-xl border border-slate-200 p-4">
                       <p className="text-sm text-slate-500">
-                        Streak
+                        {t.dashboard.streak}
                       </p>
 
                       <p className="mt-2 text-2xl font-bold">
@@ -187,41 +429,36 @@ export default function Home() {
                   <div className="mt-6 rounded-xl border border-slate-200 p-5">
                     <div className="flex items-center justify-between">
                       <h3 className="font-bold">
-                        Today's tasks
+                        {t.dashboard.todaysTasks}
                       </h3>
 
                       <Link
                         href="/tasks"
                         className="text-sm text-indigo-600 transition hover:text-indigo-700"
                       >
-                        View all
+                        {t.dashboard.viewAll}
                       </Link>
                     </div>
 
                     <div className="mt-4 space-y-3">
-                      <div className="flex items-center gap-3">
-                        <div className="h-5 w-5 rounded border-2 border-indigo-500" />
+                      {tasks.map((task, index) => (
+                        <div
+                          key={task}
+                          className="flex items-center gap-3"
+                        >
+                          <div
+                            className={`h-5 w-5 rounded border-2 ${
+                              index < 2
+                                ? "border-indigo-500"
+                                : "border-slate-300"
+                            }`}
+                          />
 
-                        <span className="text-sm text-slate-600">
-                          Study Mathematics - Chapter 4
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        <div className="h-5 w-5 rounded border-2 border-indigo-500" />
-
-                        <span className="text-sm text-slate-600">
-                          Finish Programming Assignment
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-3">
-                        <div className="h-5 w-5 rounded border-2 border-slate-300" />
-
-                        <span className="text-sm text-slate-600">
-                          Review Physics Notes
-                        </span>
-                      </div>
+                          <span className="text-sm text-slate-600">
+                            {task}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -239,42 +476,41 @@ export default function Home() {
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-2xl text-center">
             <p className="text-sm font-semibold uppercase tracking-wider text-indigo-600">
-              Everything you need
+              {t.landing.featuresLabel}
             </p>
 
             <h2 className="mt-3 text-3xl font-bold tracking-tight md:text-4xl">
-              One place for your entire study life
+              {t.landing.featuresTitle}
             </h2>
 
             <p className="mt-4 text-slate-600">
-              Stop switching between different apps. StudyHub keeps everything
-              organized in one workspace.
+              {t.landing.featuresDescription}
             </p>
           </div>
 
           <div className="mt-14 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
             <Feature
               icon="✓"
-              title="Tasks"
-              description="Organize assignments, deadlines, priorities, and daily goals."
+              title={t.features.tasks}
+              description={t.features.tasksDescription}
             />
 
             <Feature
               icon="◷"
-              title="Pomodoro"
-              description="Stay focused with simple study and break sessions."
+              title={t.features.pomodoro}
+              description={t.features.pomodoroDescription}
             />
 
             <Feature
               icon="✎"
-              title="Notes"
-              description="Keep your important study notes organized and easy to find."
+              title={t.features.notes}
+              description={t.features.notesDescription}
             />
 
             <Feature
               icon="👥"
-              title="Study Groups"
-              description="Study together, share materials, and collaborate with others."
+              title={t.features.groups}
+              description={t.features.groupsDescription}
             />
           </div>
         </div>
@@ -288,31 +524,31 @@ export default function Home() {
         <div className="mx-auto max-w-7xl">
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-3xl font-bold tracking-tight md:text-4xl">
-              How StudyHub works
+              {t.landing.howItWorks}
             </h2>
 
             <p className="mt-4 text-slate-600">
-              A simple workflow designed to help you stay consistent.
+              {t.landing.howDescription}
             </p>
           </div>
 
           <div className="mt-14 grid gap-8 md:grid-cols-3">
             <Step
               number="01"
-              title="Plan"
-              description="Create your schedule, subjects, tasks, and study goals."
+              title={t.landing.plan}
+              description={t.landing.planDescription}
             />
 
             <Step
               number="02"
-              title="Focus"
-              description="Use Pomodoro sessions and organized notes to stay focused."
+              title={t.landing.focus}
+              description={t.landing.focusDescription}
             />
 
             <Step
               number="03"
-              title="Achieve"
-              description="Track your progress and study together with your groups."
+              title={t.landing.achieve}
+              description={t.landing.achieveDescription}
             />
           </div>
         </div>
@@ -325,20 +561,18 @@ export default function Home() {
       >
         <div className="mx-auto max-w-4xl text-center">
           <h2 className="text-3xl font-bold text-white md:text-4xl">
-            Ready to make studying easier?
+            {t.landing.ctaTitle}
           </h2>
 
           <p className="mx-auto mt-4 max-w-2xl text-indigo-100">
-            Build better study habits, stay organized, and make progress every
-            day with StudyHub.
+            {t.landing.ctaDescription}
           </p>
 
-          {/* Bottom Get Started */}
           <Link
             href="/register"
             className="mt-8 inline-flex rounded-xl bg-white px-7 py-3.5 font-semibold text-indigo-600 transition hover:bg-indigo-50"
           >
-            Get Started
+            {t.common.getStarted}
           </Link>
         </div>
       </section>
@@ -347,11 +581,14 @@ export default function Home() {
       <footer className="bg-slate-950 px-6 py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 text-sm text-slate-400 md:flex-row">
           <p>
-            © 2026 Study<span className="text-indigo-400">Hub</span>. All
-            rights reserved.
+            © 2026 Study
+            <span className="text-indigo-400">
+              Hub
+            </span>
+            . {t.landing.allRights}
           </p>
 
-          <p>Built for better studying.</p>
+          <p>{t.landing.footer}</p>
         </div>
       </footer>
     </main>

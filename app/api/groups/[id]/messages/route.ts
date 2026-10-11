@@ -52,7 +52,22 @@ function ensureMessagePinColumn() {
   }
 }
 
+
 function ensureChatColumn() {
+  const table = db
+    .prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table'
+        AND name = 'study_groups'
+    `)
+    .get();
+
+  // During build, the application database table may not exist yet.
+  if (!table) {
+    return;
+  }
+
   const columns = db
     .prepare(`PRAGMA table_info(study_groups)`)
     .all() as Array<{ name: string }>;
@@ -64,6 +79,7 @@ function ensureChatColumn() {
     `);
   }
 }
+
 
 ensureMessageMediaColumns();
 ensureMessagePinColumn();
